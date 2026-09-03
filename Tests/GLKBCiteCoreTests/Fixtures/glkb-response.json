@@ -1,0 +1,32 @@
+{
+  "status": "ok",
+  "query": "ZnT8 is associated with type 1 diabetes.",
+  "references": [
+    {
+      "pmid": "38743124",
+      "title": " ZnT8 and type 1 diabetes ",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/38743124/",
+      "n_citation": 12,
+      "date": 2024,
+      "journal": "Nature Medicine",
+      "authors": ["A Author", "B Author"],
+      "why": "Direct evidence for ZnT8",
+      "evidence": [
+        {"quote": " ZnT8 is an autoantigen. ", "context_type": "abstract"},
+        "Additional supporting text."
+      ]
+    },
+    {"pmid": 38743124, "title": "Duplicate must be removed"},
+    [
+      "Second article",
+      "https://pubmed.ncbi.nlm.nih.gov/12345678/",
+      9,
+      "2020",
+      "Diabetes",
+      ["C Author"]
+    ],
+    {"pmid": "999", "title": ""},
+    "not a reference"
+  ],
+  "diagnostics": {"pipeline":"cite", "elapsed_ms": 2500}
+}

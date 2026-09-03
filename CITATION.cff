@@ -1,0 +1,71 @@
+cff-version: 1.2.0
+message: >-
+  If you use GLKB Cite, please cite this software and the GLKB resource paper.
+title: GLKB Cite
+type: software
+authors:
+  - name: GLKB Team
+repository-code: https://github.com/RingoMao/GLKB-cite
+url: https://github.com/RingoMao/GLKB-cite
+license: Apache-2.0
+version: 0.1.1
+date-released: 2026-09-03
+preferred-citation:
+  type: article
+  title: Building a literature knowledge base towards transparent biomedical AI
+  authors:
+    - family-names: Huang
+      given-names: Yuanhao
+    - family-names: Han
+      given-names: Zhaowei
+    - family-names: Luo
+      given-names: Xin
+    - family-names: Luo
+      given-names: Xuteng
+    - family-names: Gao
+      given-names: Yijia
+    - family-names: Zhao
+      given-names: Meiqi
+    - family-names: Tang
+      given-names: Feitong
+    - family-names: Wang
+      given-names: Yiqun
+    - family-names: Chen
+      given-names: Jiyu
+    - family-names: Li
+      given-names: Chengfan
+    - family-names: Lu
+      given-names: Xinyu
+    - family-names: Jiao
+      given-names: Tiancheng
+    - family-names: Qiu
+      given-names: Jiahao
+    - family-names: Deng
+      given-names: Feiyang
+    - family-names: Guan
+      given-names: Lingxiao
+    - family-names: Shang
+      given-names: Haohong
+    - family-names: Feng
+      given-names: Fan
+    - family-names: Vu
+      given-names: Thi Hong Ha
+    - family-names: Bate
+      given-names: Thomas
+    - family-names: Xue
+      given-names: Dongxiang
+    - family-names: Cartailler
+      given-names: Jean-Philippe
+    - family-names: Stitzel
+      given-names: Michael
+    - family-names: Chen
+      given-names: Shuibing
+    - family-names: Brissova
+      given-names: Marcela
+    - family-names: Parker
+      given-names: Stephen
+    - family-names: Liu
+      given-names: Jie
+  year: 2024
+  journal: bioRxiv
+  doi: 10.1101/2024.09.22.614323

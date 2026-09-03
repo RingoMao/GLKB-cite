@@ -1,0 +1,13 @@
+GLKB Cite
+Copyright 2026 GLKB Cite contributors
+
+This product includes software developed by GLKB Cite contributors and uses the
+GLKB citation service. The GLKB scientific resource should be cited as described
+in CITATION.cff and README.md.
+
+GLKB Cite is an independent implementation using public macOS APIs. It contains
+no PopClip source code and no source code copied from the GLKB_tools repository.
+
+The Apache License 2.0 does not grant permission to use GLKB names, logos,
+service marks, API access, datasets, or third-party content. Third-party software
+notices are provided in THIRD-PARTY-NOTICES.txt.

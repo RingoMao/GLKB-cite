@@ -1,0 +1,24 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Built and signed artifacts
+*.app
+*.dmg
+*.pkg
+*.xcarchive
+*.p12
+*.cer
+*.provisionprofile
+
+# Credentials and local release configuration
+.env
+.env.*
+!.env.example
+*API*KEY*.txt
+*api*key*.txt
+notary-profile*
+appcast-private-key*
