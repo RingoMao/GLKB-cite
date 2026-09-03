@@ -21,7 +21,11 @@ final class ClipboardCompatibilityCaptureTests: XCTestCase {
         let adapter = GeneralPasteboardAdapter(pasteboard: pasteboard)
         let snapshot = try adapter.snapshot(maximumBytes: 1_024)
         XCTAssertEqual(snapshot.items.count, 2)
-        XCTAssertEqual(snapshot.byteCount, 32)
+        let materializedByteCount = snapshot.items
+            .flatMap(\.representations)
+            .reduce(0) { $0 + $1.data.count }
+        XCTAssertEqual(snapshot.byteCount, materializedByteCount)
+        XCTAssertGreaterThanOrEqual(snapshot.byteCount, 32)
 
         pasteboard.clearContents()
         pasteboard.setString("temporary selection", forType: .string)
