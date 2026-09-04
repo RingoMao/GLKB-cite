@@ -3,7 +3,7 @@
 GLKB Cite is a native macOS menu-bar app for finding biomedical citations from
 selected text. Its core workflow is simple:
 
-> 划词（选中一句科学陈述）→ 点击 GLKB 按钮 → 请求 GLKB → 查看可核验的 PubMed 文献
+> Select text -> Click GLKB cite button -> Request GLKB -> Return references
 
 The app is a team-development handoff of the working macOS demo. It is a
 clean-room implementation built with public Apple APIs and does not contain or
