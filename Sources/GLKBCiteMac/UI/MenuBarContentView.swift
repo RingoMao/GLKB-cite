@@ -1,64 +1,38 @@
 import AppKit
 import SwiftUI
 
+/// Menu-bar menu, matching the design: Find Citations, the badge toggle,
+/// Settings, About, Quit. Everything else lives in Settings or the About panel.
 struct MenuBarContentView: View {
     @EnvironmentObject private var coordinator: AppCoordinator
     @EnvironmentObject private var settings: AppSettings
 
     var body: some View {
-        Button {
+        Button("Find Citations") {
             coordinator.captureCitations()
-        } label: {
-            Label("Find Citations", systemImage: "text.book.closed")
         }
         .keyboardShortcut("g", modifiers: [.command, .option])
-
-        Button {
-            coordinator.showLastResult()
-        } label: {
-            Label("Show Last Result", systemImage: "rectangle.stack")
-        }
 
         Divider()
 
         Toggle(
-            "Automatic Selection Badge (Beta)",
+            "Show Selection Badge",
             isOn: Binding(
                 get: { settings.automaticSelectionEnabled },
                 set: { coordinator.setAutomaticSelectionEnabled($0) }
             )
         )
 
-        Button {
-            coordinator.showOnboarding()
-        } label: {
-            Label("Setup…", systemImage: "checklist")
-        }
+        Divider()
 
-        Button {
+        Button("Settings…") {
             coordinator.showSettings()
-        } label: {
-            Label("Settings…", systemImage: "gearshape")
         }
         .keyboardShortcut(",", modifiers: .command)
 
-        if coordinator.updateController.isConfigured {
-            Button {
-                coordinator.checkForUpdates()
-            } label: {
-                Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
-            }
-            .disabled(!coordinator.updateController.canCheckForUpdates)
+        Button("About GLKB Cite") {
+            coordinator.showAbout()
         }
-
-        Button {
-            if let noticesURL {
-                NSWorkspace.shared.open(noticesURL)
-            }
-        } label: {
-            Label("Third-Party Notices…", systemImage: "doc.text")
-        }
-        .disabled(noticesURL == nil)
 
         Divider()
 
@@ -66,12 +40,5 @@ struct MenuBarContentView: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q", modifiers: .command)
-    }
-
-    private var noticesURL: URL? {
-        Bundle.main.url(
-            forResource: "THIRD-PARTY-NOTICES",
-            withExtension: "txt"
-        )
     }
 }

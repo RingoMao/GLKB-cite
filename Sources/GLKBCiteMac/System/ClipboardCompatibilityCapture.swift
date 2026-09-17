@@ -328,12 +328,33 @@ public final class CompositeSelectionProvider: AsyncSystemSelectionCapturing {
     }
 
     public func captureSelection(allowCompatibility: Bool) async throws -> SystemSelection {
+        try await captureSelection(allowCompatibility: allowCompatibility, expectedProcess: nil)
+    }
+
+    public func captureSelection(allowCompatibility: Bool, expectedProcess: pid_t?) async throws -> SystemSelection {
         do {
-            return try accessibility.captureSelection()
+            let selection = try accessibility.captureSelection()
+            if let expectedProcess, selection.sourceProcessIdentifier != expectedProcess {
+                throw SelectionCaptureError.staleSelection
+            }
+            return selection
         } catch let SelectionCaptureError.selectionUnavailable(source) {
             guard allowCompatibility, compatibilityEnabled() else { throw SelectionCaptureError.selectionUnavailable(source: source) }
+            // Never post Copy into a process other than the one the request
+            // was made for.
+            if let expectedProcess, source.processIdentifier != expectedProcess {
+                throw SelectionCaptureError.staleSelection
+            }
             return try await compatibility.capture(from: source)
         }
+    }
+
+    public func focusedElementIsItemContainer() -> Bool {
+        accessibility.focusedElementIsItemContainer()
+    }
+
+    public func gestureLandsInContent(from start: CGPoint, to end: CGPoint) -> Bool {
+        accessibility.gestureLandsInContent(from: start, to: end)
     }
 
     public func isStillValid(_ selection: SystemSelection) async -> Bool {

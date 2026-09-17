@@ -14,13 +14,8 @@ struct GLKBCiteApp: App {
             MenuBarTemplateIcon()
         }
         .menuBarExtraStyle(.menu)
-
-        Settings {
-            SettingsView()
-                .environmentObject(coordinator)
-                .environmentObject(coordinator.settings)
-                .frame(width: 560, height: 570)
-        }
+        // Settings are shown through CiteSettingsWindowController; a parallel
+        // SwiftUI `Settings` scene would open a second, duplicate window.
     }
 }
 

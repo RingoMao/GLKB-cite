@@ -1,292 +1,323 @@
 import GLKBCiteCore
 import SwiftUI
 
+/// Settings window: sidebar with General / Literature / Privacy, row-based
+/// panes. Sections and rows follow the product mockup.
 struct SettingsView: View {
     @EnvironmentObject private var coordinator: AppCoordinator
     @EnvironmentObject private var settings: AppSettings
 
-    var body: some View {
-        TabView {
-            GeneralSettingsPane()
-                .environmentObject(coordinator)
-                .environmentObject(settings)
-                .tabItem { Label("General", systemImage: "gearshape") }
+    private enum Pane: String, CaseIterable {
+        case general = "General"
+        case literature = "Literature"
+        case privacy = "Privacy"
 
-            LiteratureSettingsPane()
-                .environmentObject(coordinator)
-                .environmentObject(settings)
-                .tabItem { Label("Literature", systemImage: "books.vertical") }
-
-            PrivacySettingsPane()
-                .environmentObject(coordinator)
-                .environmentObject(settings)
-                .tabItem { Label("Privacy", systemImage: "hand.raised") }
+        var icon: String {
+            switch self {
+            case .general: return "gearshape"
+            case .literature: return "text.book.closed"
+            case .privacy: return "hand.raised"
+            }
         }
-        .padding(16)
+    }
+
+    @State private var pane: Pane = .general
+
+    var body: some View {
+        HStack(spacing: 0) {
+            sidebar
+            Divider().overlay(Theme.hairline)
+            ScrollView {
+                Group {
+                    switch pane {
+                    case .general:
+                        GeneralSettingsPane()
+                    case .literature:
+                        LiteratureSettingsPane()
+                    case .privacy:
+                        PrivacySettingsPane()
+                    }
+                }
+                .padding(EdgeInsets(top: 22, leading: 26, bottom: 22, trailing: 26))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(Theme.cardSurface)
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Pane.allCases, id: \.rawValue) { item in
+                Button {
+                    pane = item
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: item.icon)
+                            .font(.system(size: 11))
+                            .frame(width: 22, height: 22)
+                            .background(
+                                pane == item ? Color.white.opacity(0.22) : Color.primary.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 6)
+                            )
+                        Text(item.rawValue)
+                            .font(.system(size: 12.5))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 7)
+                    .foregroundStyle(pane == item ? Color.white : Color.secondary)
+                    .background(
+                        pane == item ? Theme.accent : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 7)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(EdgeInsets(top: 10, leading: 8, bottom: 10, trailing: 8))
+        .frame(width: 158)
+        .background(Theme.insetSurface)
     }
 }
+
+// MARK: - Shared building blocks
+
+private struct SettingsGroup<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(label.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .kerning(0.4)
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, 8)
+            content
+        }
+        .padding(.bottom, 22)
+    }
+}
+
+private struct SettingsRow<Control: View>: View {
+    let label: String
+    var description: String?
+    var showDivider = true
+    @ViewBuilder let control: Control
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(label)
+                        .font(.system(size: 12.5, weight: .medium))
+                    if let description {
+                        Text(description)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineSpacing(2)
+                            .frame(maxWidth: 340, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+                control
+            }
+            .padding(.vertical, 10)
+            if showDivider {
+                Divider().overlay(Theme.hairline)
+            }
+        }
+    }
+}
+
+private struct AccentToggle: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle("", isOn: $isOn)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .tint(Theme.accent)
+    }
+}
+
+private struct SelectPill<SelectionValue: Hashable, Options: View>: View {
+    @Binding var selection: SelectionValue
+    @ViewBuilder let options: Options
+
+    var body: some View {
+        Picker("", selection: $selection) { options }
+            .labelsHidden()
+            .fixedSize()
+    }
+}
+
+// MARK: - General
 
 private struct GeneralSettingsPane: View {
     @EnvironmentObject private var coordinator: AppCoordinator
     @EnvironmentObject private var settings: AppSettings
-    @State private var keyEntry = ""
-    @State private var keyMessage: String?
-    @State private var accessibilityTrusted = false
+    @State private var launchMessage: String?
 
     var body: some View {
-        Form {
-            Section("GLKB API key") {
-                HStack {
-                    SecureField(
-                        coordinator.hasStoredAPIKey
-                            ? "Enter a replacement glkb_ key"
-                            : "glkb_…",
-                        text: $keyEntry
-                    )
-                    Button("Save") { saveKey() }
-                        .disabled(keyEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    if coordinator.hasStoredAPIKey {
-                        Button("Remove", role: .destructive) { removeKey() }
-                    }
-                }
-                Label(
-                    coordinator.hasStoredAPIKey ? "Stored securely in macOS Keychain" : "No key stored",
-                    systemImage: coordinator.hasStoredAPIKey ? "checkmark.shield.fill" : "key"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                if let keyMessage {
-                    Text(keyMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        SettingsGroup(label: "Selection") {
+            SettingsRow(
+                label: "Show automatic selection badge (Beta)",
+                description: "Automatic mode observes selection gestures locally and never starts a GLKB request until you click the badge."
+            ) {
+                AccentToggle(isOn: Binding(
+                    get: { settings.automaticSelectionEnabled },
+                    set: { coordinator.setAutomaticSelectionEnabled($0) }
+                ))
             }
 
-            Section("Selection access") {
-                HStack {
-                    Label(
-                        accessibilityTrusted ? "Accessibility enabled" : "Accessibility required",
-                        systemImage: accessibilityTrusted ? "checkmark.circle.fill" : "exclamationmark.circle"
-                    )
-                    Spacer()
-                    if !accessibilityTrusted {
-                        Button("Request Access") {
-                            _ = coordinator.requestAccessibilityPermission()
-                            refreshAccessibility()
-                        }
-                        Button("Open System Settings") {
-                            coordinator.openAccessibilitySettings()
-                        }
-                    }
-                }
-
-                Toggle(
-                    "Show automatic selection badge (Beta)",
-                    isOn: Binding(
-                        get: { settings.automaticSelectionEnabled },
-                        set: { coordinator.setAutomaticSelectionEnabled($0) }
-                    )
-                )
-                Text("Automatic mode observes selection gestures locally and never starts a GLKB request until you click the badge.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            SettingsRow(label: "Hot key", description: shortcutDescription) {
+                Text("⌥⌘G")
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .background(Theme.insetSurface, in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.hairline))
             }
 
-            Section("Shortcuts") {
-                LabeledContent("Find citations") {
-                    HStack(spacing: 8) {
-                        Text("⌥⌘G")
-                        shortcutAvailability
-                    }
-                }
-                Text("Quit GLKB Lens while using GLKB Cite because both apps register ⌥⌘G.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let status = coordinator.shortcutStatusMessage {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
-
-            Section("Startup and updates") {
-                Toggle(
-                    "Launch GLKB Cite at login",
-                    isOn: Binding(
+            SettingsRow(label: "Launch at login", description: launchMessage, showDivider: false) {
+                VStack(alignment: .trailing, spacing: 6) {
+                    AccentToggle(isOn: Binding(
                         get: { coordinator.launchAtLoginStatus == .enabled },
                         set: { enabled in
                             do {
                                 try coordinator.setLaunchAtLoginEnabled(enabled)
+                                launchMessage = nil
                             } catch {
-                                keyMessage = error.localizedDescription
+                                launchMessage = error.localizedDescription
                             }
                         }
-                    )
-                )
-                .disabled(coordinator.launchAtLoginStatus == .unavailable)
-
-                if coordinator.launchAtLoginStatus == .requiresApproval {
-                    Button("Approve in Login Items Settings") {
-                        coordinator.openLoginItemsSettings()
+                    ))
+                    .disabled(coordinator.launchAtLoginStatus == .unavailable)
+                    if coordinator.launchAtLoginStatus == .requiresApproval {
+                        Button("Approve in Login Items") {
+                            coordinator.openLoginItemsSettings()
+                        }
+                        .buttonStyle(SecondaryButtonStyle(compact: true))
                     }
-                }
-
-                if coordinator.updateController.isConfigured {
-                    Button("Check for Updates…") { coordinator.checkForUpdates() }
-                        .disabled(!coordinator.updateController.canCheckForUpdates)
-                } else {
-                    Text("Automatic updates will be enabled in signed public builds.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
         }
-        .formStyle(.grouped)
-        .onAppear {
-            coordinator.refreshCredentialStatus()
-            coordinator.refreshLaunchAtLoginStatus()
-            refreshAccessibility()
+        .onAppear { coordinator.refreshLaunchAtLoginStatus() }
+    }
+
+    private var shortcutDescription: String {
+        var text = "Press ⌥⌘G to find citations."
+        if case .unavailable = coordinator.shortcutRegistrationReport.availability {
+            text += " The shortcut is currently unavailable — quit other apps that register ⌥⌘G."
         }
+        return text
+    }
+}
+
+// MARK: - Literature
+
+private struct LiteratureSettingsPane: View {
+    @EnvironmentObject private var coordinator: AppCoordinator
+    @EnvironmentObject private var settings: AppSettings
+    @State private var keyEntry = ""
+    @State private var keyMessage: String?
+
+    var body: some View {
+        SettingsGroup(label: "API key") {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("GLKB API key")
+                    .font(.system(size: 12.5, weight: .medium))
+                Text("Stored in macOS Keychain and sent only to the GLKB endpoint.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    SecureField(coordinator.maskedStoredAPIKey ?? "glkb_…", text: $keyEntry)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, design: .monospaced))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .frame(width: 220)
+                        .background(Theme.insetSurface, in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.hairline))
+
+                    Button("Save") { saveKey() }
+                        .buttonStyle(PrimaryButtonStyle(compact: true))
+                        .disabled(keyEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding(.top, 5)
+                if let keyMessage {
+                    Text(keyMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 10)
+        }
+
+        SettingsGroup(label: "Results") {
+            SettingsRow(label: "Include evidence excerpts") {
+                AccentToggle(isOn: $settings.includeEvidence)
+            }
+
+            SettingsRow(
+                label: "Cache duration",
+                description: "The cache exists only in memory and is cleared when GLKB Cite exits.",
+                showDivider: false
+            ) {
+                SelectPill(selection: $settings.cacheDurationMinutes) {
+                    Text("Off").tag(0)
+                    Text("5 min").tag(5)
+                    Text("15 min").tag(15)
+                    Text("1 hour").tag(60)
+                }
+            }
+        }
+        .onAppear { coordinator.refreshCredentialStatus() }
     }
 
     private func saveKey() {
         do {
             try coordinator.saveAPIKey(keyEntry)
             keyEntry = ""
-            keyMessage = "API key saved."
+            keyMessage = nil
         } catch {
             keyMessage = error.localizedDescription
         }
     }
-
-    private func removeKey() {
-        do {
-            try coordinator.deleteAPIKey()
-            keyEntry = ""
-            keyMessage = "API key removed."
-        } catch {
-            keyMessage = error.localizedDescription
-        }
-    }
-
-    private func refreshAccessibility() {
-        accessibilityTrusted = coordinator.isAccessibilityTrusted
-    }
-
-    @ViewBuilder
-    private var shortcutAvailability: some View {
-        Group {
-        if let availability = coordinator.shortcutRegistrationReport.availability {
-            switch availability {
-            case .registered:
-                Text("Available")
-                    .foregroundStyle(.green)
-            case .unavailable:
-                Text("Unavailable")
-                    .foregroundStyle(.orange)
-            }
-        }
-        }
-    }
 }
 
-private struct LiteratureSettingsPane: View {
-    @EnvironmentObject private var settings: AppSettings
-
-    var body: some View {
-        Form {
-            Section("Citation recommendations") {
-                Picker("Maximum references", selection: $settings.maxArticles) {
-                    Text("3").tag(3)
-                    Text("5").tag(5)
-                    Text("10").tag(10)
-                }
-                Toggle("Include evidence excerpts", isOn: $settings.includeEvidence)
-                Text("The citation endpoint returns references in its own order and does not support ranking or review-only filters.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Cost control") {
-                Picker("Repeat-selection cache", selection: $settings.cacheDurationMinutes) {
-                    Text("Off").tag(0)
-                    Text("5 minutes").tag(5)
-                    Text("15 minutes").tag(15)
-                    Text("1 hour").tag(60)
-                }
-                Text("The cache exists only in memory and is cleared when GLKB Cite exits.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-        }
-        .formStyle(.grouped)
-    }
-}
+// MARK: - Privacy
 
 private struct PrivacySettingsPane: View {
     @EnvironmentObject private var coordinator: AppCoordinator
     @EnvironmentObject private var settings: AppSettings
 
     var body: some View {
-        Form {
-            Section("What leaves this Mac") {
-                PrivacyRow(
-                    icon: "text.quote",
-                    title: "Selected scientific text",
-                    detail: "Sent only after you click Find Citations or invoke an explicit command."
-                )
-                PrivacyRow(
-                    icon: "key.fill",
-                    title: "Your GLKB key",
-                    detail: "Stored in macOS Keychain and sent only to the GLKB endpoint."
-                )
-            }
-
-            Section("Compatibility Capture") {
-                Toggle(
-                    "Allow temporary Copy fallback",
-                    isOn: Binding(
-                        get: { settings.compatibilityCaptureEnabled },
-                        set: { coordinator.setCompatibilityCaptureEnabled($0) }
-                    )
-                )
-                Text("When Accessibility cannot read a selection, GLKB Cite can briefly use Copy, read the text, and restore the clipboard. Clipboard history tools may still record the temporary content, and restoration cannot be guaranteed if another app changes the clipboard.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("What GLKB Cite does not collect") {
-                Label("No analytics or advertising identifiers", systemImage: "checkmark.circle")
-                Label("No selected-text, answer, or credential logs", systemImage: "checkmark.circle")
-                Label("No persistent literature-result history", systemImage: "checkmark.circle")
-            }
-
-            Section("Research use") {
-                Text("GLKB Cite is a literature research assistant, not a clinical decision system. Verify every source before citation, publication, or clinical use.")
-                    .foregroundStyle(.secondary)
-                Button("Review Setup and Privacy") { coordinator.showOnboarding() }
+        SettingsGroup(label: "Compatibility capture") {
+            SettingsRow(
+                label: "Allow temporary Copy fallback",
+                description: "If Accessibility cannot read a selection, GLKB Cite may temporarily send Copy and then restore the previous clipboard content. Clipboard-history utilities can still observe that temporary value.",
+                showDivider: false
+            ) {
+                AccentToggle(isOn: Binding(
+                    get: { settings.compatibilityCaptureEnabled },
+                    set: { coordinator.setCompatibilityCaptureEnabled($0) }
+                ))
             }
         }
-        .formStyle(.grouped)
-    }
-}
 
-private struct PrivacyRow: View {
-    let icon: String
-    let title: String
-    let detail: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .frame(width: 20)
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        SettingsGroup(label: "Data") {
+            SettingsRow(
+                label: "Sent only after you click Find Citations or invoke an explicit command.",
+                description: "Badge appearance alone never contacts GLKB. GLKB Cite has no analytics or persistent query history.",
+                showDivider: false
+            ) {
+                EmptyView()
             }
         }
     }

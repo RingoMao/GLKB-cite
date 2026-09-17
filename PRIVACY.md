@@ -19,6 +19,13 @@ a selection, GLKB Cite may temporarily invoke Copy, inspect the copied text, and
 restore every materializable clipboard representation. Clipboard managers may
 record that temporary value. GLKB Cite will not overwrite a newer clipboard
 change, and it will not send a request if safe restoration cannot complete.
+The Copy fallback runs only for explicit invocations that go through selection
+capture: the hot key, the Find Citations menu command, or clicking the selection
+badge. The macOS Service never uses it; the Service receives the selected text
+directly from the Services pasteboard. The badge itself
+is offered from Accessibility alone; in an app that exposes no selected text
+(for example some PDF viewers) it appears after a deliberate drag or
+double-click, and the temporary Copy happens only if you then click it.
 
 Before public distribution, the publisher must document the GLKB service
 operator, privacy contact, server-side retention period, deletion process, and

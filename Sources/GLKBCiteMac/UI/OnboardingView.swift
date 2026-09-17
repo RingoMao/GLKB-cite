@@ -2,93 +2,191 @@ import SwiftUI
 
 struct OnboardingView: View {
     @EnvironmentObject private var coordinator: AppCoordinator
+
+    @State private var step = 0
     @State private var apiKey = ""
     @State private var message: String?
     @State private var accessibilityTrusted = false
 
+    private let stepCount = 4
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 14) {
-                Image(systemName: "books.vertical.fill")
-                    .font(.system(size: 38))
-                    .foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Welcome to GLKB Cite")
-                        .font(.largeTitle.weight(.semibold))
-                    Text("Literature evidence for the text you select")
+        VStack(spacing: 0) {
+            content
+                .frame(maxWidth: .infinity)
+                .padding(EdgeInsets(top: 46, leading: 46, bottom: 26, trailing: 46))
+
+            Spacer(minLength: 0)
+
+            footer
+        }
+        .frame(width: 520, height: 500)
+        .background(Theme.cardSurface)
+        .onAppear {
+            coordinator.refreshCredentialStatus()
+            refreshAccessibility()
+        }
+        .task(id: step) {
+            // While the Accessibility step is visible, poll trust so the
+            // state flips as soon as the user grants access in System
+            // Settings and returns.
+            guard step == 1 || step == stepCount - 1 else { return }
+            while !Task.isCancelled {
+                refreshAccessibility()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch step {
+        case 0: welcomeStep
+        case 1: accessibilityStep
+        case 2: keyStep
+        default: privacyStep
+        }
+    }
+
+    // MARK: Steps
+
+    private var welcomeStep: some View {
+        StepLayout(
+            title: "Welcome to GLKB Cite",
+            description: "Select scientific text in any app, press ⌥⌘G or click the badge, and GLKB returns PubMed literature evidence you can cite."
+        ) {
+            InfoCard {
+                InfoRow(bold: "Select", rest: "a sentence with a scientific claim.")
+                InfoRow(bold: "Invoke", rest: "the hot key, the badge, or the Services menu.")
+                InfoRow(bold: "Cite", rest: "the returned PubMed references in one click.")
+            }
+        }
+    }
+
+    private var accessibilityStep: some View {
+        StepLayout(
+            title: "Allow selected-text access",
+            description: "Accessibility lets GLKB Cite read only the selection you invoke and position its result panel. Secure fields are always rejected."
+        ) {
+            InfoCard {
+                InfoRow(bold: "Step 2 of 4", rest: "— Accessibility required")
+                InfoRow(rest: "macOS Settings ▸ Privacy & Security ▸ Accessibility")
+                if accessibilityTrusted {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Theme.success)
+                        Text("Access granted — you're all set.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.primary)
+                    }
+                    .padding(.vertical, 4)
+                } else {
+                    InfoRow(prefix: "Enable ", bold: "GLKB Cite", rest: " in the list, then return here.")
+                }
+            }
+        }
+    }
+
+    private var keyStep: some View {
+        StepLayout(
+            title: "Store your GLKB key",
+            description: "The glkb_ key is stored in the macOS Keychain and sent only to the GLKB endpoint."
+        ) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(coordinator.hasStoredAPIKey ? "GLKB API key — stored securely" : "GLKB API key")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    SecureField(
+                        coordinator.hasStoredAPIKey ? "Enter a replacement key (optional)" : "glkb_…",
+                        text: $apiKey
+                    )
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Theme.insetSurface, in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.hairline))
+
+                    Button("Save") { saveKey() }
+                        .buttonStyle(PrimaryButtonStyle(compact: true))
+                        .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if let message {
+                    Text(message)
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
             }
+            .frame(maxWidth: 380)
+        }
+    }
 
-            SetupStep(
-                number: 1,
-                title: "Allow selected-text access",
-                detail: "Accessibility lets GLKB Cite read only the selection you invoke and position its result panel. Secure fields are always rejected."
-            ) {
-                HStack {
-                    Label(
-                        accessibilityTrusted ? "Enabled" : "Not enabled",
-                        systemImage: accessibilityTrusted ? "checkmark.circle.fill" : "circle"
-                    )
-                    Spacer()
-                    Button(accessibilityTrusted ? "Open Settings" : "Request Access") {
-                        if accessibilityTrusted {
-                            coordinator.openAccessibilitySettings()
-                        } else {
-                            _ = coordinator.requestAccessibilityPermission()
-                            accessibilityTrusted = coordinator.isAccessibilityTrusted
-                        }
-                    }
-                }
+    private var privacyStep: some View {
+        StepLayout(
+            title: "Compatibility Capture and privacy",
+            description: "If Accessibility cannot read a selection, GLKB Cite may briefly send Copy, read the text, and restore the clipboard. You can disable this in Privacy Settings."
+        ) {
+            InfoCard {
+                InfoRow(bold: "Sends text only when you ask", rest: "— badge appearance alone never contacts GLKB.")
+                InfoRow(bold: "No analytics", rest: "and no persistent query history.")
+                InfoRow(bold: "Clipboard note", rest: "— clipboard-history utilities may observe the temporary Copy value.")
             }
-
-            SetupStep(
-                number: 2,
-                title: "Store your GLKB key",
-                detail: "The glkb_ key remains in the new GLKB Cite macOS Keychain identity and is required to finish setup."
-            ) {
-                HStack {
-                    SecureField(
-                        coordinator.hasStoredAPIKey ? "GLKB key is already stored" : "glkb_…",
-                        text: $apiKey
-                    )
-                    Button("Save") { saveKey() }
-                        .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-
-            SetupStep(
-                number: 3,
-                title: "Understand Compatibility Capture",
-                detail: "If Accessibility cannot read selected text, GLKB Cite may temporarily send Copy, read the clipboard, and restore it. Clipboard-history tools may record the transient text, and newer clipboard data is never overwritten. You can disable this later in Privacy Settings."
-            ) {
-                EmptyView()
-            }
-
             if let message {
                 Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("After you click the badge or invoke ⌥⌘G, selected text is sent to GLKB. Badge appearance alone never contacts GLKB. GLKB Cite has no analytics or persistent query history.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack {
-                Button("Privacy Settings") { coordinator.showSettings() }
-                Spacer()
-                Button("Finish Setup") { coordinator.completeOnboarding() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!accessibilityTrusted || !coordinator.hasStoredAPIKey)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.danger)
+                    .padding(.top, 10)
             }
         }
-        .padding(26)
-        .frame(width: 560, height: 620)
-        .onAppear {
-            coordinator.refreshCredentialStatus()
-            accessibilityTrusted = coordinator.isAccessibilityTrusted
+    }
+
+    // MARK: Footer
+
+    private var footer: some View {
+        HStack {
+            HStack(spacing: 6) {
+                ForEach(0..<stepCount, id: \.self) { index in
+                    Circle()
+                        .fill(index == step ? Theme.accent : Theme.hairline)
+                        .frame(width: 6, height: 6)
+                }
+            }
+
+            Spacer()
+
+            HStack(spacing: 10) {
+                switch step {
+                case 1 where !accessibilityTrusted:
+                    Button("Open System Settings") { coordinator.openAccessibilitySettings() }
+                        .buttonStyle(SecondaryButtonStyle())
+                    Button("Request Access") {
+                        _ = coordinator.requestAccessibilityPermission()
+                        refreshAccessibility()
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                case stepCount - 1:
+                    Button("Finish Setup") {
+                        if !coordinator.completeOnboarding() {
+                            refreshAccessibility()
+                            message = "Grant Accessibility access and save a GLKB key before finishing setup."
+                        }
+                    }
+                        .buttonStyle(PrimaryButtonStyle())
+                        .disabled(!accessibilityTrusted || !coordinator.hasStoredAPIKey)
+                default:
+                    Button("Continue") { advance() }
+                        .buttonStyle(PrimaryButtonStyle())
+                        .disabled(step == 2 && !coordinator.hasStoredAPIKey)
+                }
+            }
         }
+        .padding(EdgeInsets(top: 16, leading: 46, bottom: 26, trailing: 46))
+    }
+
+    private func advance() {
+        message = nil
+        step = min(step + 1, stepCount - 1)
     }
 
     private func saveKey() {
@@ -100,31 +198,76 @@ struct OnboardingView: View {
             message = error.localizedDescription
         }
     }
+
+    private func refreshAccessibility() {
+        accessibilityTrusted = coordinator.isAccessibilityTrusted
+    }
 }
 
-private struct SetupStep<Content: View>: View {
-    let number: Int
+// MARK: - Layout pieces
+
+private struct StepLayout<Content: View>: View {
     let title: String
-    let detail: String
+    let description: String
     @ViewBuilder let content: Content
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Text("\(number)")
-                .font(.headline)
+        VStack(spacing: 0) {
+            GLKBMark()
+                .fill(Theme.accent)
                 .frame(width: 30, height: 30)
-                .background(.tint, in: Circle())
-                .foregroundStyle(Color(nsColor: .selectedMenuItemTextColor))
+                .frame(width: 52, height: 52)
+                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 14))
+                .padding(.bottom, 20)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 7) {
-                Text(title)
-                    .font(.headline)
-                Text(detail)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                content
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(title)
+                .font(.system(size: 18, weight: .bold))
+                .padding(.bottom, 10)
+
+            Text(description)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+                .frame(maxWidth: 380)
+                .padding(.bottom, 22)
+
+            content
         }
+    }
+}
+
+private struct InfoCard<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            content
+        }
+        .padding(EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16))
+        .frame(maxWidth: 380, alignment: .leading)
+        .background(Theme.insetSurface, in: RoundedRectangle(cornerRadius: Theme.cardCornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardCornerRadius)
+                .strokeBorder(Theme.hairline)
+        )
+    }
+}
+
+private struct InfoRow: View {
+    var prefix: String = ""
+    var bold: String?
+    let rest: String
+
+    var body: some View {
+        (Text(prefix).font(.system(size: 11.5))
+         + Text(bold.map { prefix.isEmpty ? "\($0) " : $0 } ?? "")
+            .font(.system(size: 11.5, weight: .bold)).foregroundColor(.primary)
+         + Text(rest).font(.system(size: 11.5)))
+            .foregroundStyle(.secondary)
+            .lineSpacing(2)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

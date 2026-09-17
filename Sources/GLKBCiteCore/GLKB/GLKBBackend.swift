@@ -82,6 +82,10 @@ public final class GLKBBackend: LiteratureBackend, @unchecked Sendable {
             (data, response) = try await session.data(for: request)
         } catch is CancellationError {
             throw LiteratureError.cancelled
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            // URLSession surfaces task cancellation as URLError.cancelled,
+            // not CancellationError.
+            throw LiteratureError.cancelled
         } catch {
             throw LiteratureError.transport(error.localizedDescription)
         }

@@ -14,7 +14,7 @@ GLKB Cite currently targets one citation-only endpoint:
 ```
 
 - `text`: required string, 10–1000 characters; use one scientific sentence.
-- `max_references`: requested result count. The app exposes 3, 5, and 10.
+- `max_references`: requested result count. The app always requests 5; the value is not user-configurable.
 - Header: `Authorization: Bearer <user-supplied glkb_ key>`.
 - Client timeout: 90 seconds.
 
