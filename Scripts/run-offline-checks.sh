@@ -32,6 +32,7 @@ swiftc -warnings-as-errors -sdk "$SDKROOT_VALUE" -target "$TARGET_TRIPLE" \
 swiftc -warnings-as-errors -sdk "$SDKROOT_VALUE" -target "$TARGET_TRIPLE" \
     -I "$CHECK_DIR" -L "$CHECK_DIR" -lGLKBCiteCore \
     "$PROJECT_DIR/Sources/GLKBCiteMac/System/AccessibilityPermissionManager.swift" \
+    "$PROJECT_DIR/Sources/GLKBCiteMac/System/CaptureDiagnostics.swift" \
     "$PROJECT_DIR/Sources/GLKBCiteMac/System/AccessibilitySelectionProvider.swift" \
     "$PROJECT_DIR/Sources/GLKBCiteMac/System/ClipboardCompatibilityCapture.swift" \
     "$PROJECT_DIR/Sources/GLKBCiteMac/System/AutomaticSelectionMonitor.swift" \

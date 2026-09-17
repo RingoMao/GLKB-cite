@@ -40,3 +40,19 @@ the `GLKB_tools` source repository. Attribute and cite the GLKB scientific work
 through README.md and CITATION.cff. If future code is imported from another
 project, record its exact source, revision, license, and required notices before
 merging it.
+
+## Building from a synced folder (iCloud Drive, Dropbox)
+
+Synced folders continuously stamp extended attributes onto files. Starting with
+Xcode 27, SwiftPM code-signs test bundles during `swift build`/`swift test`, and
+`codesign` refuses files carrying those attributes ("resource fork, Finder
+information, or similar detritus not allowed"). Keep build products outside the
+checkout:
+
+```sh
+swift test --scratch-path ~/Library/Caches/org.glkb.cite/build
+```
+
+`Scripts/build-app.sh` already does this (override the location with
+`SWIFTPM_SCRATCH_ROOT`), and it assembles and signs the app bundle in a private
+temporary directory for the same reason.

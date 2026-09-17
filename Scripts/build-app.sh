@@ -16,7 +16,14 @@ SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-}"
 APP_NAME="GLKB Cite"
 EXECUTABLE_NAME="GLKBCiteMac"
 OUTPUT_ROOT="$PROJECT_DIR/.build/app"
-APP_PATH="$OUTPUT_ROOT/$APP_NAME.app"
+# Assemble and sign inside a private temporary directory. Building in a
+# synced folder (iCloud Drive, Dropbox, …) breaks codesign because the file
+# provider keeps stamping extended attributes ("detritus") onto bundle files
+# between signing steps. The finished artifacts are copied to OUTPUT_ROOT.
+STAGING_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/glkb-cite-app.XXXXXX")"
+APP_PATH="$STAGING_ROOT/$APP_NAME.app"
+STAGED_DMG_PATH="$STAGING_ROOT/$APP_NAME.dmg"
+FINAL_APP_PATH="$OUTPUT_ROOT/$APP_NAME.app"
 DMG_PATH="$OUTPUT_ROOT/$APP_NAME.dmg"
 
 die() {
@@ -56,6 +63,12 @@ if [[ "$BUILD_MODE" == "distribution" ]]; then
         || die "Distribution builds require the signed Sparkle feed key and HTTPS URL."
 fi
 
+# Build products live outside the checkout. Xcode 27's SwiftPM code-signs test
+# bundles and intermediate products, and codesign rejects files that synced
+# folders (iCloud Drive, Dropbox, …) keep stamping with extended attributes.
+SCRATCH_ROOT="${SWIFTPM_SCRATCH_ROOT:-$HOME/Library/Caches/org.glkb.cite/build}"
+mkdir -p "$SCRATCH_ROOT"
+
 swift_build() {
     local arguments=(--package-path "$PROJECT_DIR")
     if [[ "${SWIFTPM_DISABLE_SANDBOX:-0}" == "1" ]]; then
@@ -74,14 +87,15 @@ swift_build() {
 }
 
 build_current_architecture() {
-    swift_build -c "$CONFIGURATION" --product "$EXECUTABLE_NAME"
-    swift_build -c "$CONFIGURATION" --show-bin-path
+    local scratch="$SCRATCH_ROOT/current"
+    swift_build --scratch-path "$scratch" -c "$CONFIGURATION" --product "$EXECUTABLE_NAME"
+    swift_build --scratch-path "$scratch" -c "$CONFIGURATION" --show-bin-path
 }
 
 build_architecture() {
     local architecture="$1"
     local triple="${architecture}-apple-macosx13.0"
-    local scratch="$PROJECT_DIR/.build/$architecture"
+    local scratch="$SCRATCH_ROOT/$architecture"
     swift_build --scratch-path "$scratch" --triple "$triple" -c "$CONFIGURATION" --product "$EXECUTABLE_NAME"
     swift_build --scratch-path "$scratch" --triple "$triple" -c "$CONFIGURATION" --show-bin-path
 }
@@ -156,6 +170,11 @@ do
     [[ -e "$component" ]] || die "Sparkle signing component is missing: $component"
 done
 
+# Files copied out of a synced folder (iCloud Drive, Dropbox, …) carry file
+# provider extended attributes that codesign rejects as "detritus". The bundle
+# now lives in private temp storage, so one strip keeps it clean.
+xattr -cr "$APP_PATH"
+
 sign_sparkle_component() {
     local component="$1"
     if [[ "$SIGNING_IDENTITY" == "-" ]]; then
@@ -188,7 +207,7 @@ if [[ "$SKIP_DMG" == "1" ]]; then
     rm -f "$DMG_PATH"
 else
     rm -f "$DMG_PATH"
-    DMG_STAGE="$(mktemp -d "$OUTPUT_ROOT/dmg-stage.XXXXXX")"
+    DMG_STAGE="$(mktemp -d "$STAGING_ROOT/dmg-stage.XXXXXX")"
     cleanup_dmg_stage() {
         rm -rf "$DMG_STAGE"
     }
@@ -198,24 +217,32 @@ else
     /usr/bin/ditto "$PROJECT_DIR/INSTALL.md" "$DMG_STAGE/Installation Guide.md"
     [[ -L "$DMG_STAGE/Applications" && "$(readlink "$DMG_STAGE/Applications")" == "/Applications" ]] \
         || die "The installer staging folder is missing its Applications shortcut."
-    hdiutil create -volname "$APP_NAME Installer" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG_PATH" >/dev/null
+    hdiutil create -volname "$APP_NAME Installer" -srcfolder "$DMG_STAGE" -ov -format UDZO "$STAGED_DMG_PATH" >/dev/null
     cleanup_dmg_stage
     trap - EXIT
     if [[ "$SIGNING_IDENTITY" != "-" ]]; then
-        codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG_PATH"
-        codesign --verify --verbose=2 "$DMG_PATH"
+        codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$STAGED_DMG_PATH"
+        codesign --verify --verbose=2 "$STAGED_DMG_PATH"
     fi
 fi
 
 if [[ "$BUILD_MODE" == "distribution" ]]; then
-    /bin/bash "$SCRIPT_DIR/verify-release.sh" preflight "$APP_PATH" "$DMG_PATH"
+    /bin/bash "$SCRIPT_DIR/verify-release.sh" preflight "$APP_PATH" "$STAGED_DMG_PATH"
 elif [[ "$SKIP_DMG" == "1" ]]; then
     EXPECT_UNIVERSAL="$UNIVERSAL" /bin/bash "$SCRIPT_DIR/verify-release.sh" development "$APP_PATH"
 else
-    EXPECT_UNIVERSAL="$UNIVERSAL" /bin/bash "$SCRIPT_DIR/verify-release.sh" development "$APP_PATH" "$DMG_PATH"
+    EXPECT_UNIVERSAL="$UNIVERSAL" /bin/bash "$SCRIPT_DIR/verify-release.sh" development "$APP_PATH" "$STAGED_DMG_PATH"
 fi
 
-printf '%s\n' "$APP_PATH"
+# Publish the verified artifacts from staging into the repository build folder.
+rm -rf "$FINAL_APP_PATH"
+/usr/bin/ditto "$APP_PATH" "$FINAL_APP_PATH"
+if [[ "$SKIP_DMG" != "1" ]]; then
+    /usr/bin/ditto "$STAGED_DMG_PATH" "$DMG_PATH"
+fi
+rm -rf "$STAGING_ROOT"
+
+printf '%s\n' "$FINAL_APP_PATH"
 if [[ "$SKIP_DMG" != "1" ]]; then
     printf '%s\n' "$DMG_PATH"
 fi

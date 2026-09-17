@@ -31,7 +31,17 @@ if [[ ! -d "$APP_PATH" ]]; then
     exit 66
 fi
 
-/bin/bash "$SCRIPT_DIR/verify-release.sh" preflight "$APP_PATH" "$ARTIFACT"
+# NOTARY_BUILD_KIND=release (default) expects a full distribution build with a
+# Sparkle feed; NOTARY_BUILD_KIND=tester notarizes a Developer ID signed build
+# that has no update channel yet (for sharing with testers).
+NOTARY_BUILD_KIND="${NOTARY_BUILD_KIND:-release}"
+case "$NOTARY_BUILD_KIND" in
+    release) PREFLIGHT_MODE=preflight; POSTFLIGHT_MODE=postflight ;;
+    tester) PREFLIGHT_MODE=signed-preflight; POSTFLIGHT_MODE=signed-postflight ;;
+    *) printf 'NOTARY_BUILD_KIND must be release or tester.\n' >&2; exit 64 ;;
+esac
+
+/bin/bash "$SCRIPT_DIR/verify-release.sh" "$PREFLIGHT_MODE" "$APP_PATH" "$ARTIFACT"
 
 if ! NOTARY_OUTPUT="$(
     xcrun notarytool submit "$ARTIFACT" \
@@ -57,4 +67,4 @@ xcrun stapler staple "$ARTIFACT"
 xcrun stapler validate "$APP_PATH"
 xcrun stapler validate "$ARTIFACT"
 
-/bin/bash "$SCRIPT_DIR/verify-release.sh" postflight "$APP_PATH" "$ARTIFACT"
+/bin/bash "$SCRIPT_DIR/verify-release.sh" "$POSTFLIGHT_MODE" "$APP_PATH" "$ARTIFACT"

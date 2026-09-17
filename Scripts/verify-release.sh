@@ -7,6 +7,10 @@ usage() {
     printf '  %s development /path/to/GLKB-Cite.app [/path/to/GLKB-Cite.dmg]\n' "$0" >&2
     printf '  %s preflight /path/to/GLKB-Cite.app /path/to/GLKB-Cite.dmg\n' "$0" >&2
     printf '  %s postflight /path/to/GLKB-Cite.app /path/to/GLKB-Cite.dmg\n' "$0" >&2
+    printf '  %s signed-preflight /path/to/GLKB-Cite.app /path/to/GLKB-Cite.dmg\n' "$0" >&2
+    printf '  %s signed-postflight /path/to/GLKB-Cite.app /path/to/GLKB-Cite.dmg\n' "$0" >&2
+    printf 'signed-* modes verify a Developer ID signed, notarizable tester build\n' >&2
+    printf 'that has no Sparkle update feed configured.\n' >&2
     exit 64
 }
 
@@ -23,8 +27,12 @@ DMG_PATH="${3:-}"
 EXPECTED_SPARKLE_VERSION="2.9.5"
 
 case "$MODE" in
-    development | preflight | postflight) ;;
+    development | preflight | postflight | signed-preflight | signed-postflight) ;;
     *) usage ;;
+esac
+REQUIRES_SPARKLE_FEED=1
+case "$MODE" in
+    signed-preflight | signed-postflight) REQUIRES_SPARKLE_FEED=0 ;;
 esac
 
 if [[ "$MODE" != "development" && -z "$DMG_PATH" ]]; then
@@ -166,14 +174,21 @@ if [[ "$MODE" == "development" ]]; then
     exit 0
 fi
 
-PUBLIC_KEY="$(plist_value "$INFO_PLIST" SUPublicEDKey)" \
-    || fail "SUPublicEDKey is missing from the distribution bundle."
-FEED_URL="$(plist_value "$INFO_PLIST" SUFeedURL)" \
-    || fail "SUFeedURL is missing from the distribution bundle."
-[[ "$PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
-    || fail "SUPublicEDKey is not a 32-byte base64 Ed25519 public key."
-[[ "$FEED_URL" =~ ^https://[^[:space:]]+$ ]] \
-    || fail "SUFeedURL is not an absolute HTTPS URL."
+if [[ "$REQUIRES_SPARKLE_FEED" == "1" ]]; then
+    PUBLIC_KEY="$(plist_value "$INFO_PLIST" SUPublicEDKey)" \
+        || fail "SUPublicEDKey is missing from the distribution bundle."
+    FEED_URL="$(plist_value "$INFO_PLIST" SUFeedURL)" \
+        || fail "SUFeedURL is missing from the distribution bundle."
+    [[ "$PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
+        || fail "SUPublicEDKey is not a 32-byte base64 Ed25519 public key."
+    [[ "$FEED_URL" =~ ^https://[^[:space:]]+$ ]] \
+        || fail "SUFeedURL is not an absolute HTTPS URL."
+else
+    # A tester build must not pretend to have an update channel.
+    if plist_value "$INFO_PLIST" SUFeedURL >/dev/null; then
+        fail "A signed tester build must not carry SUFeedURL; use distribution mode for release builds."
+    fi
+fi
 
 APP_SIGNATURE="$(codesign -dvvv "$APP_PATH" 2>&1)" \
     || fail "Could not inspect the application signature."
@@ -212,8 +227,8 @@ DMG_TEAM="$(printf '%s\n' "$DMG_SIGNATURE" | sed -n 's/^TeamIdentifier=//p' | he
 [[ "$DMG_TEAM" == "$APP_TEAM" ]] \
     || fail "The app and disk image are signed by different teams."
 
-if [[ "$MODE" == "preflight" ]]; then
-    printf 'Distribution preflight passed: %s\n' "$DMG_PATH"
+if [[ "$MODE" == "preflight" || "$MODE" == "signed-preflight" ]]; then
+    printf '%s preflight passed: %s\n' "$([[ "$MODE" == "preflight" ]] && echo Distribution || echo "Signed tester build")" "$DMG_PATH"
     exit 0
 fi
 
