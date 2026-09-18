@@ -311,18 +311,14 @@ private struct ReferenceCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("\(index)")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 16, height: 16)
-                        .background(Theme.insetSurface, in: RoundedRectangle(cornerRadius: 5))
-                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-                    Text(reference.title)
-                        .font(.system(size: 12.5, weight: .bold))
-                        .lineSpacing(2)
-                        .textSelection(.enabled)
-                }
+                // The number chip is part of the title's text run (like the
+                // mockup's inline <span>), so wrapped lines return to the
+                // card's left edge instead of hanging under the first line.
+                (numberChip + Text("  ") + Text(reference.title).font(.system(size: 12.5, weight: .bold)))
+                    .foregroundStyle(.primary, Theme.insetSurface)
+                    .lineSpacing(2)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 if !metadata.isEmpty {
                     Text(metadata)
@@ -399,6 +395,21 @@ private struct ReferenceCard: View {
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
         }
+    }
+
+    /// A rounded grey square with the reference number, drawn from the SF
+    /// Symbols "N.square.fill" family in palette mode so it sits inline with
+    /// the title text: layer 1 (the numeral) takes the secondary text colour,
+    /// layer 2 (the square) the panel's inset surface colour.
+    private var numberChip: Text {
+        guard (0...50).contains(index) else {
+            return Text("\(index)")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.secondary)
+        }
+        return Text(Image(systemName: "\(index).square.fill").symbolRenderingMode(.palette))
+            .font(.system(size: 14, weight: .bold))
+            .foregroundColor(.secondary)
     }
 
     private var evidenceQuote: String? {
