@@ -2,51 +2,184 @@ import AppKit
 import GLKBCiteCore
 import SwiftUI
 
+/// Borderless panel that can still become key so buttons, scrolling, and
+/// text selection work, and that closes on Escape.
+private final class FloatingKeyablePanel: NSPanel {
+    var onCancel: (() -> Void)?
+
+    override var canBecomeKey: Bool { true }
+
+    override func cancelOperation(_ sender: Any?) {
+        onCancel?()
+    }
+}
+
+/// Hosts the results panel.
+///
+/// Placement is deliberately predictable: whenever the panel is brought on
+/// screen from hidden it appears at the top-right corner of the display the
+/// selection (or the pointer) is on. While it stays visible it keeps whatever
+/// position it has — including anywhere the user dragged it by its header —
+/// and content-driven height changes grow it downward from a fixed top edge,
+/// like a normal window.
 @MainActor
 final class ResultPanelController: NSObject, NSWindowDelegate {
     private weak var coordinator: AppCoordinator?
-    private var panel: NSPanel!
+    private var panel: FloatingKeyablePanel!
+    /// The top-left corner the panel is pinned to while visible.
+    private var pinnedTopLeft: CGPoint?
+    private var isRepositioning = false
+
+    private static let screenMargin: CGFloat = 16
 
     init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
         super.init()
 
-        panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 650),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow],
+        panel = FloatingKeyablePanel(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 420),
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        panel.title = "GLKB Cite"
         panel.level = .floating
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
-        panel.minSize = NSSize(width: 500, height: 420)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isMovableByWindowBackground = true
+        panel.hidesOnDeactivate = false
         panel.delegate = self
-        panel.contentViewController = NSHostingController(
+        panel.onCancel = { [weak self] in self?.hide() }
+
+        let hosting = NSHostingController(
             rootView: ResultPanelView()
                 .environmentObject(coordinator)
                 .environmentObject(coordinator.settings)
         )
+        hosting.sizingOptions = [.preferredContentSize]
+        panel.contentViewController = hosting
     }
 
     func show(anchor: ScreenRect?) {
-        let desiredSize = panel.frame.size
-        panel.setFrameOrigin(
-            PanelPlacement.origin(
-                size: desiredSize,
-                anchor: anchor.map(CGRect.init),
-                fallbackPoint: NSEvent.mouseLocation
-            )
-        )
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
+        panel.layoutIfNeeded()
+        if !panel.isVisible {
+            placeAtTopRight(of: Self.targetScreen(for: anchor.map(CGRect.init)))
+        }
+        panel.orderFrontRegardless()
+        panel.makeKey()
     }
 
-    func windowWillClose(_ notification: Notification) {
+    func hide() {
         if coordinator?.phase == .loading {
             coordinator?.cancelQuery()
         }
+        panel.orderOut(nil)
+        pinnedTopLeft = nil
+    }
+
+    // MARK: Placement
+
+    private func placeAtTopRight(of screen: NSScreen?) {
+        guard let visible = screen?.visibleFrame else { return }
+        pin(topLeft: CGPoint(
+            x: visible.maxX - Self.screenMargin - panel.frame.width,
+            y: visible.maxY - Self.screenMargin
+        ))
+    }
+
+    /// Moves the panel so its top-left corner sits at `topLeft`, nudging it
+    /// up only if its bottom would otherwise fall off the screen.
+    private func pin(topLeft: CGPoint) {
+        var origin = CGPoint(x: topLeft.x, y: topLeft.y - panel.frame.height)
+        if let visible = (NSScreen.screens.first { NSMouseInRect(topLeft, $0.frame, false) } ?? NSScreen.main)?.visibleFrame {
+            origin.y = max(origin.y, visible.minY + Self.screenMargin)
+        }
+        pinnedTopLeft = CGPoint(x: origin.x, y: origin.y + panel.frame.height)
+        isRepositioning = true
+        panel.setFrameOrigin(origin)
+        isRepositioning = false
+    }
+
+    /// The display the selection was made on, else the one under the pointer.
+    private static func targetScreen(for anchor: CGRect?) -> NSScreen? {
+        if let anchor, let screen = NSScreen.screens.first(where: { $0.frame.intersects(anchor) }) {
+            return screen
+        }
+        let pointer = NSEvent.mouseLocation
+        return NSScreen.screens.first(where: { NSMouseInRect(pointer, $0.frame, false) }) ?? NSScreen.main
+    }
+
+    // MARK: NSWindowDelegate
+
+    /// SwiftUI resizes the panel as its content changes; keep the top edge
+    /// where it was so the panel grows and shrinks downward.
+    func windowDidResize(_ notification: Notification) {
+        guard let pinnedTopLeft else { return }
+        pin(topLeft: pinnedTopLeft)
+    }
+
+    /// Any move we did not make ourselves is the user dragging the panel:
+    /// adopt that position for the rest of this visibility session.
+    func windowDidMove(_ notification: Notification) {
+        guard !isRepositioning, panel.isVisible else { return }
+        pinnedTopLeft = CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
+    }
+
+    /// Current on-screen frame, or nil while hidden.
+    var frame: NSRect? { panel.isVisible ? panel.frame : nil }
+}
+
+/// The 460pt "Cite" modal from the mockup, presented as its own floating
+/// panel centred over the results panel (which is only 380pt wide).
+@MainActor
+final class CitePanelController {
+    private weak var coordinator: AppCoordinator?
+    private var panel: FloatingKeyablePanel!
+
+    init(coordinator: AppCoordinator) {
+        self.coordinator = coordinator
+        panel = FloatingKeyablePanel(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 420),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .floating
+        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.onCancel = { [weak coordinator] in coordinator?.dismissCite() }
+
+        let hosting = NSHostingController(
+            rootView: CitePanelView()
+                .environmentObject(coordinator)
+        )
+        hosting.sizingOptions = [.preferredContentSize]
+        panel.contentViewController = hosting
+    }
+
+    func show(over anchor: NSRect?) {
+        panel.layoutIfNeeded()
+        let size = panel.frame.size
+        let reference = anchor ?? NSRect(origin: NSEvent.mouseLocation, size: .zero)
+        var origin = CGPoint(x: reference.midX - size.width / 2, y: reference.midY - size.height / 2)
+        let screen = NSScreen.screens.first(where: { $0.frame.intersects(reference) }) ?? NSScreen.main
+        if let visible = screen?.visibleFrame {
+            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
+            origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+        }
+        panel.setFrameOrigin(origin)
+        panel.orderFrontRegardless()
+        panel.makeKey()
+    }
+
+    func hide() {
+        panel.orderOut(nil)
     }
 }
 
@@ -63,16 +196,34 @@ final class SelectionBadgePanelController {
 
     func show(event: AutomaticSelectionEvent) {
         dismiss()
-        let collapsedSize = NSSize(width: 48, height: 48)
-        anchorPoint = CGPoint(
-            x: event.selection.context.bounds.map { CGFloat($0.x + $0.width + 8) }
-                ?? CGFloat(event.pointerLocation.x + 8),
-            y: event.selection.context.bounds.map { CGFloat($0.y - 4) }
-                ?? CGFloat(event.pointerLocation.y + 8)
-        )
+        // The badge always sits beside the point where the mouse button was
+        // released. Selection bounds are not used for placement: apps report
+        // them inconsistently, and for multi-line selections the rectangle's
+        // edge can be a long way from where the user's attention (and cursor)
+        // actually is.
+        let pointer = CGPoint(x: event.pointerLocation.x, y: event.pointerLocation.y)
+        let panelSize = NSSize(width: SelectionBadgeView.panelSize, height: SelectionBadgeView.panelSize)
+        let tile = SelectionBadgeView.tileSize
+        let margin = SelectionBadgeView.margin
+        let screen = Self.screen(containing: pointer)
+        let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: panelSize)
+
+        // Preferred spot: up and to the right of the arrow cursor, which keeps
+        // the badge clear of both the cursor glyph and the text just selected.
+        var tileOrigin = CGPoint(x: pointer.x + 12, y: pointer.y + 10)
+        var placement = "up-right"
+        if tileOrigin.x + tile > visible.maxX - 8 {
+            tileOrigin.x = pointer.x - 12 - tile
+            placement = "up-left"
+        }
+        if tileOrigin.y + tile > visible.maxY - 8 {
+            tileOrigin.y = pointer.y - 26 - tile
+            placement = placement.replacingOccurrences(of: "up", with: "down")
+        }
+        anchorPoint = CGPoint(x: tileOrigin.x - margin, y: tileOrigin.y - margin)
 
         let newPanel = NSPanel(
-            contentRect: NSRect(origin: anchorPoint, size: collapsedSize),
+            contentRect: NSRect(origin: anchorPoint, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -92,8 +243,11 @@ final class SelectionBadgePanelController {
             )
         )
         panel = newPanel
-        constrainToVisibleScreen()
+        constrainToVisibleScreen(preferring: screen)
         newPanel.orderFrontRegardless()
+        CaptureDiagnostics.log(
+            "badge: shown \(placement) of pointer at \(Int(pointer.x)),\(Int(pointer.y))"
+        )
 
         scheduleDismissal()
     }
@@ -115,14 +269,37 @@ final class SelectionBadgePanelController {
         panel = nil
     }
 
-    private func constrainToVisibleScreen() {
+    /// The display the pointer is on. `NSMouseInRect` (not `CGRect.contains`)
+    /// treats a display's top edge as inside — `NSEvent.mouseLocation` reports
+    /// exactly `frame.maxY` when the cursor is pinned to the top pixel row. If
+    /// no display claims the point, use the nearest one rather than
+    /// `NSScreen.main`, which can be an unrelated monitor.
+    private static func screen(containing point: CGPoint) -> NSScreen? {
+        if let hit = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) }) {
+            return hit
+        }
+        return NSScreen.screens.min { lhs, rhs in
+            distance(from: point, to: lhs.frame) < distance(from: point, to: rhs.frame)
+        } ?? NSScreen.main
+    }
+
+    private static func distance(from point: CGPoint, to rect: CGRect) -> CGFloat {
+        let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+        let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+        return hypot(dx, dy)
+    }
+
+    private func constrainToVisibleScreen(preferring preferred: NSScreen?) {
         guard let panel else { return }
-        let screen = NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) })
+        let screen = preferred
+            ?? NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) })
             ?? NSScreen.main
         guard let visible = screen?.visibleFrame else { return }
+        // Keep the visible tile (not the transparent shadow margin) on screen.
+        let margin = SelectionBadgeView.margin
         var origin = panel.frame.origin
-        origin.x = min(max(origin.x, visible.minX + 6), visible.maxX - panel.frame.width - 6)
-        origin.y = min(max(origin.y, visible.minY + 6), visible.maxY - panel.frame.height - 6)
+        origin.x = min(max(origin.x, visible.minX + 6 - margin), visible.maxX - panel.frame.width - 6 + margin)
+        origin.y = min(max(origin.y, visible.minY + 6 - margin), visible.maxY - panel.frame.height - 6 + margin)
         panel.setFrameOrigin(origin)
     }
 }
@@ -137,12 +314,15 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         super.init()
 
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 620),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 520),
+            styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "Set Up GLKB Cite"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentViewController = NSHostingController(
@@ -170,20 +350,20 @@ final class CiteSettingsWindowController: NSObject, NSWindowDelegate {
         super.init()
 
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 570),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 440),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "GLKB Cite Settings"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 520, height: 500)
+        window.minSize = NSSize(width: 600, height: 440)
         window.delegate = self
         window.contentViewController = NSHostingController(
             rootView: SettingsView()
                 .environmentObject(coordinator)
                 .environmentObject(coordinator.settings)
-                .frame(minWidth: 520, minHeight: 500)
+                .frame(minWidth: 600, minHeight: 440)
         )
         window.center()
     }
@@ -191,25 +371,6 @@ final class CiteSettingsWindowController: NSObject, NSWindowDelegate {
     func show() {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-    }
-}
-
-private enum PanelPlacement {
-    static func origin(size: NSSize, anchor: CGRect?, fallbackPoint: CGPoint) -> CGPoint {
-        let anchorRect = anchor ?? CGRect(origin: fallbackPoint, size: .zero)
-        let screen = NSScreen.screens.first(where: { $0.frame.intersects(anchorRect) })
-            ?? NSScreen.screens.first(where: { $0.frame.contains(fallbackPoint) })
-            ?? NSScreen.main
-        guard let visible = screen?.visibleFrame else { return fallbackPoint }
-
-        var x = anchorRect.midX - size.width / 2
-        var y = anchorRect.minY - size.height - 10
-        if y < visible.minY {
-            y = anchorRect.maxY + 10
-        }
-        x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
-        y = min(max(y, visible.minY + 8), visible.maxY - size.height - 8)
-        return CGPoint(x: x, y: y)
     }
 }
 

@@ -11,7 +11,7 @@ public enum GLKBAPIKeyStoreError: Error, LocalizedError {
         case .invalidKey:
             return "Enter a GLKB API key beginning with glkb_."
         case .invalidStoredValue:
-            return "The saved GLKB API key could not be read. Remove it and enter it again."
+            return "The saved GLKB API key could not be read. Save a new glkb_ key in Settings to replace it."
         case let .keychainFailure(status):
             let description = SecCopyErrorMessageString(status, nil) as String?
             return description.map { "Keychain error: \($0)" }

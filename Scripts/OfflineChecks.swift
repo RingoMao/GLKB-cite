@@ -139,9 +139,9 @@ struct OfflineChecks {
 
     private static func gestureChecks() {
         let point = SystemPoint(x: 0, y: 0)
-        require(!SelectionGesture(start: point, end: point, clickCount: 1, shiftPressed: false, observedDrag: false).isCompatibilityEligible, "caret rejection")
-        require(SelectionGesture(start: point, end: point, clickCount: 2, shiftPressed: false, observedDrag: false).isCompatibilityEligible, "double click")
-        require(SelectionGesture(start: point, end: .init(x: 10, y: 0), clickCount: 1, shiftPressed: false, observedDrag: true).isCompatibilityEligible, "drag")
+        require(!SelectionGesture(start: point, end: point, clickCount: 1, shiftPressed: false, observedDrag: false).isLikelySelection, "caret rejection")
+        require(SelectionGesture(start: point, end: point, clickCount: 2, shiftPressed: false, observedDrag: false).isLikelySelection, "double click")
+        require(SelectionGesture(start: point, end: .init(x: 10, y: 0), clickCount: 1, shiftPressed: false, observedDrag: true).isLikelySelection, "drag")
     }
 }
 

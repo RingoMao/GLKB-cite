@@ -96,7 +96,13 @@ public actor InMemoryLiteratureCache {
 /// Shares one paid request among simultaneous callers with an identical opaque
 /// cache key. Completed values still obey the user-selected cache duration.
 public actor InFlightLiteratureRequests {
-    private var tasks: [LiteratureCacheKey: Task<LiteratureResult, Error>] = [:]
+    private struct Entry {
+        let id: UUID
+        let task: Task<LiteratureResult, Error>
+        var waiters: Int
+    }
+
+    private var entries: [LiteratureCacheKey: Entry] = [:]
 
     public init() {}
 
@@ -104,20 +110,52 @@ public actor InFlightLiteratureRequests {
         for key: LiteratureCacheKey,
         operation: @escaping @Sendable () async throws -> LiteratureResult
     ) async throws -> LiteratureResult {
-        if let task = tasks[key] { return try await task.value }
-        let task = Task { try await operation() }
-        tasks[key] = task
-        do {
-            let result = try await task.value
-            tasks.removeValue(forKey: key)
-            return result
-        } catch {
-            tasks.removeValue(forKey: key)
-            throw error
+        let entryID: UUID
+        let task: Task<LiteratureResult, Error>
+        if var existing = entries[key] {
+            existing.waiters += 1
+            entries[key] = existing
+            entryID = existing.id
+            task = existing.task
+        } else {
+            let entry = Entry(id: UUID(), task: Task { try await operation() }, waiters: 1)
+            entries[key] = entry
+            entryID = entry.id
+            task = entry.task
+        }
+
+        defer { finishWait(for: key, entryID: entryID) }
+        return try await withTaskCancellationHandler {
+            let value = try await task.value
+            // A waiter cancelled while a *shared* request stayed alive for
+            // other callers must still observe its own cancellation.
+            try Task.checkCancellation()
+            return value
+        } onCancel: {
+            Task { await self.waiterCancelled(for: key, entryID: entryID) }
         }
     }
 
-    public var count: Int { tasks.count }
+    private func finishWait(for key: LiteratureCacheKey, entryID: UUID) {
+        guard var entry = entries[key], entry.id == entryID else { return }
+        entry.waiters -= 1
+        if entry.waiters <= 0 {
+            entries.removeValue(forKey: key)
+        } else {
+            entries[key] = entry
+        }
+    }
+
+    private func waiterCancelled(for key: LiteratureCacheKey, entryID: UUID) {
+        guard let entry = entries[key], entry.id == entryID else { return }
+        // Propagate cancellation to the underlying request when the last
+        // remaining waiter gives up, so the paid network call actually stops.
+        if entry.waiters <= 1 {
+            entry.task.cancel()
+        }
+    }
+
+    public var count: Int { entries.count }
 }
 
 /// Adds memory-only caching to any backend without exposing query text in cache keys.

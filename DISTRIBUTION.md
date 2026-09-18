@@ -15,6 +15,34 @@ the macOS Accessibility API to read the current cross-application selection.
 The program costs USD 99 per year if the fee waiver is not approved. Developer
 ID signing and notarization have no separate per-app fee.
 
+## Tester builds (Developer ID signed and notarized, no update feed)
+
+Before the Sparkle update channel exists, share builds with testers as a
+Developer ID signed **and notarized** DMG so it opens with a plain double-click.
+Ad-hoc development builds are refused by Gatekeeper on other Macs (macOS 15+
+reports them as "damaged"); see INSTALL.md for the workaround testers can use
+in the meantime.
+
+One-time setup (run yourself; it never sees your Apple password):
+
+```sh
+./Scripts/setup-signing.sh
+```
+
+It checks for Xcode tools and a `Developer ID Application` certificate, then
+lets `notarytool` store an app-specific password in your Keychain under the
+profile `GLKBCite-Notary`. Then, for each tester build:
+
+```sh
+VERSION="0.2.0" BUILD_NUMBER="6" ./Scripts/release-tester.sh
+```
+
+This builds universal, signs with your Developer ID (Hardened Runtime and
+timestamp), notarizes the DMG, staples tickets to both the app and the DMG,
+runs the `signed-postflight` Gatekeeper verification, and writes the finished
+DMG to `.build/release/`. Tester builds deliberately carry no `SUFeedURL`;
+`verify-release.sh signed-*` rejects one that does.
+
 ## Build and notarize
 
 Full Xcode is required for the release SDK and signing tools.
@@ -82,8 +110,8 @@ hosted privacy notice before shipping. Record the retention period, purposes,
 linked-to-user status, deletion route, operator identity, and privacy contact.
 
 `THIRD-PARTY-NOTICES.txt` contains the complete Sparkle 2.9.5 and bundled
-component notices. It must remain in `Contents/Resources` and accessible from
-the app menu.
+component notices. It must remain in `Contents/Resources` and stay reachable in
+the app through the About panel's credits link.
 
 ## Release gates
 

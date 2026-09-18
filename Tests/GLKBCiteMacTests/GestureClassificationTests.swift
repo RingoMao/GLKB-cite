@@ -3,14 +3,14 @@ import XCTest
 
 final class GestureClassificationTests: XCTestCase {
     func testCompatibilityEligibilityRejectsOrdinaryCaretClick() {
-        XCTAssertFalse(gesture().isCompatibilityEligible)
+        XCTAssertFalse(gesture().isLikelySelection)
     }
 
     func testCompatibilityEligibilityAcceptsSelectionGestures() {
-        XCTAssertTrue(gesture(endX: 12).isCompatibilityEligible)
-        XCTAssertTrue(gesture(clickCount: 2).isCompatibilityEligible)
-        XCTAssertTrue(gesture(shift: true).isCompatibilityEligible)
-        XCTAssertTrue(gesture(dragged: true).isCompatibilityEligible)
+        XCTAssertTrue(gesture(endX: 12).isLikelySelection)
+        XCTAssertTrue(gesture(clickCount: 2).isLikelySelection)
+        XCTAssertTrue(gesture(shift: true).isLikelySelection)
+        XCTAssertTrue(gesture(dragged: true).isLikelySelection)
     }
 
     private func gesture(
@@ -26,5 +26,14 @@ final class GestureClassificationTests: XCTestCase {
             shiftPressed: shift,
             observedDrag: dragged
         )
+    }
+
+    func testDeliberateSelectionRequiresRealDragOrMultiClick() {
+        XCTAssertFalse(gesture().isDeliberateSelection)
+        XCTAssertFalse(gesture(shift: true).isDeliberateSelection, "shift-click alone selects list rows, not text")
+        XCTAssertFalse(gesture(endX: 5, dragged: true).isDeliberateSelection, "a 5pt jitter is not a drag")
+        XCTAssertFalse(gesture(endX: 12).isDeliberateSelection, "distance without observed drag events")
+        XCTAssertTrue(gesture(endX: 12, dragged: true).isDeliberateSelection)
+        XCTAssertTrue(gesture(clickCount: 2).isDeliberateSelection)
     }
 }
