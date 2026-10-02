@@ -23,6 +23,10 @@ enum Theme {
     static let accentSoft = dynamic(light: NSColor(srgbRed: 0.941, green: 0.968, blue: 1.0, alpha: 1),
                                     dark: NSColor(srgbRed: 0.13, green: 0.20, blue: 0.34, alpha: 1))
 
+    /// Resting background of a reference card's "Cite" pill (#D9E6FE).
+    static let citeSurface = dynamic(light: NSColor(srgbRed: 0.851, green: 0.902, blue: 0.996, alpha: 1),
+                                     dark: NSColor(srgbRed: 0.13, green: 0.20, blue: 0.34, alpha: 1))
+
     /// Amber pair used for citation-count/quantity signals.
     static let amber = dynamic(light: NSColor(srgbRed: 0.541, green: 0.353, blue: 0.110, alpha: 1),
                                dark: NSColor(srgbRed: 0.941, green: 0.753, blue: 0.427, alpha: 1))
@@ -46,6 +50,13 @@ enum Theme {
     /// Opaque card surface placed on top of the translucent panel material.
     static let cardSurface = dynamic(light: NSColor(srgbRed: 0.992, green: 0.992, blue: 1.0, alpha: 1),
                                      dark: NSColor(srgbRed: 0.16, green: 0.16, blue: 0.18, alpha: 1))
+
+    /// Opaque background of the floating results panel. A flat surface
+    /// rather than a translucent material, so the panel reads the same
+    /// bright, clean grey over any document instead of tinting with
+    /// whatever sits behind it.
+    static let panelSurface = dynamic(light: NSColor(srgbRed: 0.961, green: 0.961, blue: 0.965, alpha: 1),
+                                      dark: NSColor(srgbRed: 0.125, green: 0.125, blue: 0.14, alpha: 1))
 
     /// Slightly recessed surface (quote boxes, number chips, inputs).
     static let insetSurface = dynamic(light: NSColor(srgbRed: 0.957, green: 0.957, blue: 0.961, alpha: 1),

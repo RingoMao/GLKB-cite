@@ -1,8 +1,9 @@
 GLKB Cite Third-Party Notices
 =============================
 
-GLKB Cite includes Sparkle 2.9.5. The complete license and bundled-component
-notices from that resolved release are reproduced below.
+GLKB Cite includes Sparkle 2.9.5 and the "quote" icon from Lucide. The
+complete license and bundled-component notices from the resolved Sparkle
+release are reproduced below, followed by the Lucide notice.
 
 Sparkle 2.9.5
 -------------
@@ -141,3 +142,29 @@ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
 IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+Lucide (icon "quote")
+---------------------
+
+The reference cards' Cite button draws Lucide's "quote" icon
+(https://lucide.dev), reproduced as vector path data in
+Sources/GLKBCiteMac/UI/LucideIcons.swift.
+
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+Only the ISC terms above apply to "quote": it is not among the Lucide icons
+derived from the Feather project, which carry an additional MIT notice.

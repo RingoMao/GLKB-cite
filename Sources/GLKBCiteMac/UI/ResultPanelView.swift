@@ -42,7 +42,7 @@ struct ResultPanelView: View {
         .frame(width: 380)
         .frame(minHeight: 180, maxHeight: 560, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
-        .background(.regularMaterial)
+        .background(Theme.panelSurface)
         .clipShape(RoundedRectangle(cornerRadius: Theme.windowCornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.windowCornerRadius)
@@ -321,36 +321,40 @@ private struct ReferenceCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 if !metadata.isEmpty {
-                    Text(metadata)
+                    metadataLine
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
             }
 
-            if includeEvidence, let quote = evidenceQuote {
-                HStack(alignment: .bottom, spacing: 6) {
+            if includeEvidence, let quote = evidenceQuotes.first {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("\u{201C}…\(quote)\u{201D}")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                        .lineSpacing(2)
                         .lineLimit(quoteExpanded ? nil : 2)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Button {
-                        withAnimation(.easeOut(duration: 0.15)) { quoteExpanded.toggle() }
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(quoteExpanded ? 180 : 0))
+                    // Expanding also reveals the other excerpts GLKB
+                    // returned for this reference; collapsed keeps
+                    // showing only the first one, clamped, as before.
+                    if quoteExpanded {
+                        ForEach(evidenceQuotes.indices.dropFirst(), id: \.self) { index in
+                            Text("\u{201C}…\(evidenceQuotes[index])\u{201D}")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(quoteExpanded ? "Collapse quote" : "Expand quote")
                 }
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .lineSpacing(2)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Keep the last line clear of the disclosure button.
+                .padding(.trailing, 20)
                 .padding(EdgeInsets(top: 7, leading: 8, bottom: 7, trailing: 8))
                 .background(Theme.insetSurface, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(alignment: .bottomTrailing) {
+                    QuoteDisclosureButton(isExpanded: $quoteExpanded)
+                        .padding(EdgeInsets(top: 0, leading: 0, bottom: 2, trailing: 2))
+                }
             }
 
             HStack(spacing: 8) {
@@ -366,15 +370,14 @@ private struct ReferenceCard: View {
 
                 Button(action: cite) {
                     HStack(spacing: 4) {
-                        Image(systemName: "quote.opening")
-                            .font(.system(size: 8.5, weight: .bold))
+                        LucideQuoteIcon(size: 12)
                         Text("Cite")
                             .font(.system(size: 10.5, weight: .semibold))
                     }
                     .foregroundStyle(citeHovered ? Color.white : Theme.accentDark)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 3)
-                    .background(citeHovered ? Theme.accent : Theme.accentSoft, in: Capsule())
+                    .background(citeHovered ? Theme.accent : Theme.citeSurface, in: Capsule())
                     .contentShape(Capsule())
                     .onHover { hovering in
                         withAnimation(.easeOut(duration: 0.12)) { citeHovered = hovering }
@@ -412,25 +415,56 @@ private struct ReferenceCard: View {
             .foregroundColor(.secondary)
     }
 
-    private var evidenceQuote: String? {
-        guard let quote = reference.evidence.first?.quote
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !quote.isEmpty else { return nil }
-        return quote
+    /// Every evidence excerpt of the reference, trimmed, empty ones dropped.
+    /// The first is shown collapsed; the rest appear when the quote expands.
+    private var evidenceQuotes: [String] {
+        reference.evidence
+            .map { $0.quote.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
-    /// "Authors · Year · Journal", authors abbreviated to two plus "et al."
-    private var metadata: String {
+    /// "Authors · Year", authors abbreviated to two plus "et al."
+    private var authorsAndYear: String {
         let authors: String
         if reference.authors.count <= 2 {
             authors = reference.authors.joined(separator: ", ")
         } else {
             authors = reference.authors.prefix(2).joined(separator: ", ") + ", et al."
         }
-        return [authors, reference.date, reference.journal]
-            .compactMap { $0 }
+        return [authors, reference.date ?? ""]
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
+    }
+
+    private var journalName: String {
+        (reference.journal ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// "Authors · Year · Journal"
+    private var metadata: String {
+        [authorsAndYear, journalName]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+
+    /// The metadata line keeps the journal name whole. Everything sits on
+    /// one line when it fits; otherwise the journal moves to its own line
+    /// instead of breaking at an arbitrary space, and only a journal name
+    /// wider than the card wraps within itself. Separators appear only
+    /// between items on the same line, never after the last one.
+    @ViewBuilder
+    private var metadataLine: some View {
+        if authorsAndYear.isEmpty || journalName.isEmpty {
+            Text(metadata)
+        } else {
+            ViewThatFits(in: .horizontal) {
+                Text(metadata)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(authorsAndYear)
+                    Text(journalName)
+                }
+            }
+        }
     }
 
     /// "PMID: 38291045 · 87 Citations", as in the mockup.
@@ -440,6 +474,36 @@ private struct ReferenceCard: View {
             parts.append("\(count) Citations")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// The quote box's expand/collapse control. The chevron sits in a 24-point
+/// rounded hit area with a hover highlight, so it reads as a button and is
+/// easy to hit inside the floating panel, where a missed click would start
+/// a window drag instead.
+private struct QuoteDisclosureButton: View {
+    @Binding var isExpanded: Bool
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(isHovered ? HierarchicalShapeStyle.primary : HierarchicalShapeStyle.secondary)
+                .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                .frame(width: 24, height: 22)
+                .background(.quaternary.opacity(isHovered ? 1 : 0), in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
+        }
+        .help(isExpanded ? "Show less" : "Show the full excerpt")
+        .accessibilityLabel(isExpanded ? "Collapse quote" : "Expand quote")
     }
 }
 
