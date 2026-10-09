@@ -42,12 +42,23 @@ public protocol GlobalHotKeyProviding: AnyObject {
 public final class GlobalHotKeyManager: GlobalHotKeyProviding {
     nonisolated fileprivate static let signature: OSType = 0x474C4B43 // "GLKC"
     private static let identifier: UInt32 = 1
-    private var eventHandlerReference: EventHandlerRef?
-    private var hotKeyReference: EventHotKeyRef?
+    // Only touched on the main actor; declared unsafe so `deinit` can tear
+    // the Carbon registrations down.
+    nonisolated(unsafe) private var eventHandlerReference: EventHandlerRef?
+    nonisolated(unsafe) private var hotKeyReference: EventHotKeyRef?
     private var handler: (@MainActor @Sendable () -> Void)?
     public private(set) var registrationReport = GlobalHotKeyRegistrationReport()
 
     public init() {}
+
+    deinit {
+        // The Carbon handler holds an unretained pointer to this object; it
+        // must be torn down before the object goes away, even if the owner
+        // forgot to call `unregister()`.
+        if let hotKeyReference { UnregisterEventHotKey(hotKeyReference) }
+        if let eventHandlerReference { RemoveEventHandler(eventHandlerReference) }
+    }
+
     public var isRegistered: Bool { hotKeyReference != nil }
 
     public func register(handler: @escaping @MainActor @Sendable () -> Void) throws
