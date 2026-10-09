@@ -20,7 +20,7 @@ depend on PopClip.
   contacts the backend.
 - Sends a request only after the user clicks the badge, presses `⌥⌘G`, invokes
   the menu command, or uses the macOS Service.
-- Falls back, when explicitly enabled, to a guarded temporary Copy transaction
+- Falls back, only when you have turned on **Allow temporary Copy fallback** (asked in the setup wizard, changeable in Settings → Privacy), to a guarded temporary Copy transaction
   for apps that do not expose selections through Accessibility.
 - Calls the GLKB citation endpoint and presents deduplicated PubMed references,
   relevance reasons, and evidence excerpts.

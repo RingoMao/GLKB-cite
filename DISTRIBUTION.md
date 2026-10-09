@@ -31,17 +31,28 @@ One-time setup (run yourself; it never sees your Apple password):
 
 It checks for Xcode tools and a `Developer ID Application` certificate, then
 lets `notarytool` store an app-specific password in your Keychain under the
-profile `GLKBCite-Notary`. Then, for each tester build:
+profile `GLKBCite-Notary`. The Developer ID private key is generated on the
+signing Mac and never leaves it; nobody emails or shares a `.p12`.
+
+Then, for each tester build, raise `BUILD_NUMBER` in the `VERSION` file at
+the repository root (every build handed to anyone needs a higher number;
+Sparkle compares build numbers numerically) and run:
 
 ```sh
-VERSION="0.2.0" BUILD_NUMBER="6" ./Scripts/release-tester.sh
+./Scripts/release-tester.sh
 ```
 
-This builds universal, signs with your Developer ID (Hardened Runtime and
-timestamp), notarizes the DMG, staples tickets to both the app and the DMG,
+Pass `DEVELOPER_ID_APPLICATION="Developer ID Application: … (TEAMID)"` when
+the Keychain holds more than one Developer ID identity. The script reads the
+version from `VERSION`, refuses a build number that is already tagged, pins
+dependencies to `Package.resolved`, builds universal, signs with your
+Developer ID (Hardened Runtime and timestamp), notarizes and staples the
+**app**, rebuilds the DMG from the stapled app, notarizes and staples the DMG,
 runs the `signed-postflight` Gatekeeper verification, and writes the finished
-DMG to `.build/release/`. Tester builds deliberately carry no `SUFeedURL`;
-`verify-release.sh signed-*` rejects one that does.
+DMG to `.build/release/`. Afterwards tag the commit as it suggests
+(`v<version>-build<number>`) so the number cannot be reused. Tester builds
+deliberately carry no `SUFeedURL`; `verify-release.sh signed-*` rejects one
+that does.
 
 ## Build and notarize
 
@@ -52,22 +63,37 @@ BUILD_MODE=distribution \
 DEVELOPER_ID_APPLICATION="Developer ID Application: University of Michigan (…)" \
 SPARKLE_PUBLIC_KEY="base64-ed25519-public-key" \
 SPARKLE_FEED_URL="https://official.example.org/glkb-cite/appcast.xml" \
-VERSION="0.1.1" BUILD_NUMBER="2" UNIVERSAL=1 CONFIGURATION=release \
+UNIVERSAL=1 CONFIGURATION=release \
 "./Scripts/build-app.sh"
 
 NOTARY_PROFILE="GLKBCite-Notary" \
 "./Scripts/notarize.sh" \
-"./.build/app/GLKB Cite.dmg"
+"./.build/app/GLKB Cite.app"
 ```
 
-Distribution mode fails before packaging unless the build is universal and
-release-configured, a non-ad-hoc signing identity is supplied, both Sparkle
-values are valid, and a DMG is produced. It signs Sparkle's nested helpers
-inside-out, signs the app and DMG, and runs `verify-release.sh preflight`.
-The DMG contains the app, an `/Applications` shortcut for drag installation,
-and the same `INSTALL.md` first-run guide tracked with the source.
-Notarization requires a named Keychain profile, accepts only an `Accepted`
-result, staples both sibling app and DMG, then runs the Gatekeeper postflight.
+The version and build number come from the `VERSION` file (override with
+`VERSION=` / `BUILD_NUMBER=` only for throwaway builds). Distribution mode
+fails before packaging unless the build is universal and release-configured,
+a non-ad-hoc signing identity is supplied and present in the Keychain, both
+Sparkle values are valid, and a DMG is produced; it pins dependencies to
+`Package.resolved`. It signs Sparkle's nested helpers inside-out, signs the
+app, packages and signs the DMG with `Scripts/package-dmg.sh`, and runs
+`verify-release.sh preflight`. The DMG contains the app, an `/Applications`
+shortcut for drag installation, and the Installation Guide rendered from
+`INSTALL.md` (the Gatekeeper-workaround section is removed for signed builds).
+The bundle carries `LICENSE.txt`, `NOTICE.txt` and `THIRD-PARTY-NOTICES.txt`
+in `Contents/Resources`, as Apache-2.0 §4 requires of redistributions.
+
+`notarize.sh` requires a named Keychain profile and accepts only an
+`Accepted` result. It notarizes and staples the **app first**, rebuilds and
+signs the DMG from the stapled app, notarizes and staples the DMG, then runs
+the Gatekeeper postflight. (Stapling a DMG does not staple the app inside it,
+so this order is what lets the installed app pass Gatekeeper offline.)
+
+Build products are written to `~/Library/Caches/org.glkb.cite/build`
+(override with `SWIFTPM_SCRATCH_ROOT`), not into the checkout: Xcode 27's
+SwiftPM code-signs intermediates, and synced folders break that. Only the
+verified `.app`/`.dmg` are copied into `.build/app`.
 
 Never publish the development-mode artifact. Keep the same bundle identifier,
 Developer ID team, and Sparkle key across upgrades unless following Sparkle's
@@ -116,8 +142,9 @@ the app through the About panel's credits link.
 ## Release gates
 
 - The publisher completes project-name and trademark clearance before any public release.
+- `VERSION` was raised and the previous build's tag exists; CI (`app-bundle` job) is green.
 - `verify-release.sh preflight` succeeds before notarization.
-- `verify-release.sh postflight` validates signatures, tickets and Gatekeeper.
+- `verify-release.sh postflight` validates signatures, tickets (app and DMG) and Gatekeeper.
 - An extracted bundle contains no `glkb_` credential or selected-text fixture.
 - The root privacy manifest, full notices, expected Sparkle 2.9.5 framework,
   secure feed keys, rpath and both architecture slices are present.
