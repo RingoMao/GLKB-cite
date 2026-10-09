@@ -144,22 +144,33 @@ final class CitationFormatterTests: XCTestCase {
         XCTAssertTrue(CitationFormatter.ris(for: mixed).contains("AU  - Smith, J., Jr."))
     }
 
-    func testAuthorNameParsing() {
-        func parsed(_ raw: String) -> (String, [String], String?, Bool)? {
-            AuthorName.parse(raw).map { ($0.surname, $0.givenNames, $0.suffix, $0.isCorporate) }
+    func testAuthorNameParsing() throws {
+        func parsed(_ raw: String) throws -> (String, [String], String?, Bool) {
+            let name = try XCTUnwrap(AuthorName.parse(raw), raw)
+            return (name.surname, name.givenNames, name.suffix, name.isCorporate)
         }
-        XCTAssertTrue(parsed("Caelles CA")! == ("Caelles", ["CA"], nil, false))
-        XCTAssertTrue(parsed("C A Caelles")! == ("Caelles", ["C", "A"], nil, false))
-        XCTAssertTrue(parsed("Caelles, Carme")! == ("Caelles", ["Carme"], nil, false))
-        XCTAssertTrue(parsed("Carme Caelles")! == ("Caelles", ["Carme"], nil, false))
-        XCTAssertTrue(parsed("J van der Berg")! == ("van der Berg", ["J"], nil, false))
-        XCTAssertTrue(parsed("van der Berg JA")! == ("van der Berg", ["JA"], nil, false))
-        XCTAssertTrue(parsed("Smith, John, Jr.")! == ("Smith", ["John"], "Jr", false))
-        XCTAssertTrue(parsed("Anonymous")! == ("Anonymous", [], nil, false))
-        XCTAssertTrue(parsed("GBD 2019 Collaborators")! == ("GBD 2019 Collaborators", [], nil, true))
-        XCTAssertNil(parsed("   "))
+        XCTAssertTrue(try parsed("Caelles CA") == ("Caelles", ["CA"], nil, false))
+        XCTAssertTrue(try parsed("C A Caelles") == ("Caelles", ["C", "A"], nil, false))
+        XCTAssertTrue(try parsed("Caelles, Carme") == ("Caelles", ["Carme"], nil, false))
+        XCTAssertTrue(try parsed("Carme Caelles") == ("Caelles", ["Carme"], nil, false))
+        XCTAssertTrue(try parsed("J van der Berg") == ("van der Berg", ["J"], nil, false))
+        XCTAssertTrue(try parsed("van der Berg JA") == ("van der Berg", ["JA"], nil, false))
+        XCTAssertTrue(try parsed("Ludwig Van Beethoven") == ("Van Beethoven", ["Ludwig"], nil, false))
+        XCTAssertTrue(try parsed("J Y Lee") == ("Lee", ["J", "Y"], nil, false))
+        XCTAssertTrue(try parsed("M Garcia Lopez") == ("Garcia Lopez", ["M"], nil, false))
+        XCTAssertTrue(try parsed("Smith, John, Jr.") == ("Smith", ["John"], "Jr", false))
+        XCTAssertTrue(try parsed("Smith, Jr.") == ("Smith", [], "Jr", false))
+        XCTAssertTrue(try parsed("Smith III") == ("Smith", [], "III", false))
+        XCTAssertTrue(try parsed("Smith J 2nd") == ("Smith", ["J"], "2nd", false))
+        XCTAssertTrue(try parsed("Ivanov IV") == ("Ivanov", ["IV"], nil, false))
+        XCTAssertTrue(try parsed("Anonymous") == ("Anonymous", [], nil, false))
+        XCTAssertTrue(try parsed("GBD 2019 Collaborators") == ("GBD 2019 Collaborators", [], nil, true))
+        XCTAssertTrue(try parsed("Study Group") == ("Study Group", [], nil, true))
+        XCTAssertTrue(try parsed("Study A") == ("Study", ["A"], nil, false))
+        XCTAssertTrue(try parsed("A Study") == ("Study", ["A"], nil, false))
+        XCTAssertNil(AuthorName.parse("   "))
 
-        let hyphenated = AuthorName.parse("Jean-Pierre Dupont")!
+        let hyphenated = try XCTUnwrap(AuthorName.parse("Jean-Pierre Dupont"))
         XCTAssertEqual(hyphenated.inverted(fullGivenNames: false), "Dupont, J.-P.")
         XCTAssertEqual(hyphenated.inverted(fullGivenNames: true), "Dupont, Jean-Pierre")
         XCTAssertEqual(hyphenated.vancouver, "Dupont JP")
@@ -222,7 +233,7 @@ final class CitationFormatterTests: XCTestCase {
         let entry = CitationFormatter.bibtex(for: reference)
         XCTAssertTrue(entry.hasPrefix("@article{pmid38291045,"))
         XCTAssertTrue(entry.contains("author = {Chen, J. and Rodriguez, M. and Patel, S.}"))
-        XCTAssertTrue(entry.contains("title = {Type I interferon signaling precedes islet autoimmunity}"))
+        XCTAssertTrue(entry.contains("title = {{Type I interferon signaling precedes islet autoimmunity}}"))
         XCTAssertTrue(entry.contains("journal = {Cell Reports Medicine}"))
         XCTAssertTrue(entry.contains("year = {2024}"))
         XCTAssertTrue(entry.contains("url = {https://pubmed.ncbi.nlm.nih.gov/38291045/}"))
@@ -234,13 +245,15 @@ final class CitationFormatterTests: XCTestCase {
         braced.title = "Signaling {in} β-cells"
         XCTAssertTrue(
             CitationFormatter.bibtex(for: braced)
-                .contains("title = {Signaling \\{in\\} β-cells}")
+                .contains("title = {{Signaling \\{in\\} β-cells}}")
         )
     }
 
     func testRISRecord() {
         let record = CitationFormatter.ris(for: reference)
-        let lines = record.components(separatedBy: "\n")
+        XCTAssertTrue(record.hasSuffix("ER  - \r\n"))
+        XCTAssertFalse(record.contains("\r\n\r\n"))
+        let lines = record.components(separatedBy: "\r\n").dropLast()
         XCTAssertEqual(lines.first, "TY  - JOUR")
         XCTAssertTrue(lines.contains("AU  - Chen, J."))
         XCTAssertTrue(lines.contains("AU  - Patel, S."))
@@ -252,5 +265,79 @@ final class CitationFormatterTests: XCTestCase {
         XCTAssertTrue(lines.contains("DB  - PubMed"))
         XCTAssertTrue(lines.contains("UR  - https://pubmed.ncbi.nlm.nih.gov/38291045/"))
         XCTAssertEqual(lines.last, "ER  - ")
+    }
+
+    func testBibTeXEscapesEveryTeXSpecialCharacterOnce() {
+        var special = reference
+        special.title = ##"Cost & benefit: 5% of H_2O at #1 ~ ^ $x$ \ back"##
+        special.journal = "J {Odd} & Co"
+        let entry = CitationFormatter.bibtex(for: special)
+        XCTAssertTrue(entry.contains(
+            ##"title = {{Cost \& benefit: 5\% of H\_2O at \#1 \textasciitilde{} \textasciicircum{} \$x\$ \textbackslash{} back}}"##
+        ), entry)
+        XCTAssertTrue(entry.contains(##"journal = {J \{Odd\} \& Co}"##))
+        // A single pass never re-escapes its own output.
+        XCTAssertFalse(entry.contains("textbackslash\\{"))
+        XCTAssertTrue(entry.contains("url = {https://pubmed.ncbi.nlm.nih.gov/38291045/}"))
+    }
+
+    func testBibTeXKeyAndLocatorsForNonPubMedIdentifiers() {
+        let odd = LiteratureReference(
+            pmid: "doi:10.1/x y}",
+            title: "Odd identifier",
+            url: URL(string: "https://example.org/a")
+        )
+        let entry = CitationFormatter.bibtex(for: odd)
+        XCTAssertTrue(entry.hasPrefix("@article{glkb-doi101xy,"), entry)
+        XCTAssertFalse(entry.contains("pmid = "))
+        XCTAssertTrue(entry.contains("url = {https://example.org/a}"))
+        // MLA names the database only for a PubMed locator.
+        XCTAssertEqual(cite(odd, .mla), "\u{201C}Odd identifier.\u{201D} https://example.org/a.")
+        XCTAssertEqual(cite(odd, .vancouver), "Odd identifier.")
+        XCTAssertFalse(CitationFormatter.ris(for: odd).contains("AN  - "))
+
+        var unsafe = odd
+        unsafe.url = URL(string: "javascript:alert(1)")
+        XCTAssertEqual(cite(unsafe, .apa), "Odd identifier. (n.d.).")
+    }
+
+    func testLeadingZeroAndUnicodeDigitPMIDs() {
+        var padded = reference
+        padded.pmid = "0038291045"
+        XCTAssertTrue(cite(padded, .vancouver).hasSuffix("PMID: 38291045."))
+        XCTAssertTrue(CitationFormatter.bibtex(for: padded).hasPrefix("@article{pmid38291045,"))
+
+        var arabic = reference
+        arabic.pmid = "\u{0663}\u{0668}"
+        XCTAssertFalse(cite(arabic, .vancouver).contains("PMID"))
+        XCTAssertFalse(cite(arabic, .mla).contains("pubmed.ncbi"))
+    }
+
+    func testMissingTitleUsesPlaceholder() {
+        var untitled = reference
+        untitled.title = " . "
+        XCTAssertTrue(cite(untitled, .apa).contains("(2024). [Untitled]. Cell Reports Medicine."))
+        XCTAssertTrue(CitationFormatter.bibtex(for: untitled).contains("title = {{[Untitled]}}"))
+        XCTAssertTrue(CitationFormatter.ris(for: untitled).contains("TI  - [Untitled]\r\n"))
+    }
+
+    func testYearRequiresFourPlausibleASCIIDigits() {
+        XCTAssertEqual(CitationFormatter.year(from: "2024 Mar 14"), "2024")
+        XCTAssertEqual(CitationFormatter.year(from: "14-03-2022"), "2022")
+        XCTAssertEqual(CitationFormatter.year(from: "20240312"), "2024")
+        XCTAssertEqual(CitationFormatter.year(from: "vol 123, 2019"), "2019")
+        XCTAssertEqual(CitationFormatter.year(from: "9999"), "")
+        XCTAssertEqual(CitationFormatter.year(from: "0000-01-01"), "")
+        XCTAssertEqual(CitationFormatter.year(from: "12345"), "")
+        XCTAssertEqual(CitationFormatter.year(from: "\u{0662}\u{0660}\u{0662}\u{0664}"), "")
+        XCTAssertEqual(CitationFormatter.year(from: "\u{00B2}\u{00B3}\u{00B9}\u{2074}"), "")
+        XCTAssertEqual(CitationFormatter.year(from: nil), "")
+    }
+
+    func testStyleLongNamesNameTheEdition() {
+        XCTAssertEqual(CitationFormatter.Style.chicago.longName, "Chicago 17 (notes-bibliography)")
+        for style in CitationFormatter.Style.allCases {
+            XCTAssertTrue(style.longName.hasPrefix(style.rawValue), style.rawValue)
+        }
     }
 }
