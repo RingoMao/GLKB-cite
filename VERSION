@@ -1,0 +1,6 @@
+# Single source of truth for the shipped version. Scripts/build-app.sh,
+# Scripts/release-tester.sh and CI read it; the values in Info.plist are
+# placeholders that the build replaces. Raise BUILD_NUMBER for every build
+# handed to anyone (Sparkle compares it numerically) and VERSION for releases.
+VERSION=0.2.0
+BUILD_NUMBER=10

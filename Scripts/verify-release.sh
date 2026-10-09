@@ -21,10 +21,22 @@ fail() {
 
 [[ "$#" -ge 2 && "$#" -le 3 ]] || usage
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODE="$1"
 APP_PATH="$2"
 DMG_PATH="${3:-}"
-EXPECTED_SPARKLE_VERSION="2.9.5"
+
+# The Sparkle version the bundle must carry is whatever Package.resolved pins.
+pinned_sparkle_version() {
+    awk '
+        /"identity" : "sparkle"/ { found = 1 }
+        found && /"version" :/ { gsub(/[",]/, "", $3); print $3; exit }
+    ' "$PROJECT_DIR/Package.resolved"
+}
+EXPECTED_SPARKLE_VERSION="${EXPECTED_SPARKLE_VERSION:-$(pinned_sparkle_version)}"
+[[ "$EXPECTED_SPARKLE_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] \
+    || fail "Could not read the pinned Sparkle version from Package.resolved."
 
 case "$MODE" in
     development | preflight | postflight | signed-preflight | signed-postflight) ;;
@@ -47,6 +59,8 @@ fi
 INFO_PLIST="$APP_PATH/Contents/Info.plist"
 PRIVACY_MANIFEST="$APP_PATH/Contents/Resources/PrivacyInfo.xcprivacy"
 NOTICES="$APP_PATH/Contents/Resources/THIRD-PARTY-NOTICES.txt"
+LICENSE_FILE="$APP_PATH/Contents/Resources/LICENSE.txt"
+NOTICE_FILE="$APP_PATH/Contents/Resources/NOTICE.txt"
 MENU_BAR_ICON="$APP_PATH/Contents/Resources/MenuBarIconTemplate.svg"
 MAIN_EXECUTABLE="$APP_PATH/Contents/MacOS/GLKBCiteMac"
 SPARKLE_FRAMEWORK="$APP_PATH/Contents/Frameworks/Sparkle.framework"
@@ -77,7 +91,15 @@ assert_universal() {
 require_file "$INFO_PLIST"
 require_file "$PRIVACY_MANIFEST"
 require_file "$NOTICES"
+require_file "$LICENSE_FILE"
+require_file "$NOTICE_FILE"
 require_file "$MENU_BAR_ICON"
+grep -Fq "Apache License" "$LICENSE_FILE" \
+    || fail "The bundled LICENSE.txt is not the Apache License."
+cmp -s "$LICENSE_FILE" "$PROJECT_DIR/LICENSE" \
+    || fail "The bundled LICENSE.txt differs from the repository LICENSE."
+cmp -s "$NOTICE_FILE" "$PROJECT_DIR/NOTICE" \
+    || fail "The bundled NOTICE.txt differs from the repository NOTICE."
 require_file "$MAIN_EXECUTABLE"
 require_file "$SPARKLE_INFO"
 
@@ -140,8 +162,8 @@ fi
 codesign --verify --deep --strict --verbose=2 "$APP_PATH" \
     || fail "The application code signature is invalid."
 
-AUTOUPDATE_ENTITLEMENTS="$(codesign -d --entitlements :- "$SPARKLE_VERSION_DIR/Autoupdate" 2>/dev/null)" \
-    || fail "Could not inspect Sparkle Autoupdate entitlements."
+AUTOUPDATE_ENTITLEMENTS="$(codesign -d --entitlements - --xml "$SPARKLE_VERSION_DIR/Autoupdate" 2>&1)" \
+    || fail "Could not inspect Sparkle Autoupdate entitlements: $AUTOUPDATE_ENTITLEMENTS"
 printf '%s\n' "$AUTOUPDATE_ENTITLEMENTS" \
     | grep -q '<string>org.sparkle-project.Sparkle.Autoupdate</string>' \
     || fail "Sparkle Autoupdate lost its application-identifier entitlement."

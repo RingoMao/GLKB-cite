@@ -11,13 +11,15 @@ permissions:
 jobs:
   offline-tests:
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Show toolchain
         run: xcodebuild -version && swift --version
       - name: Resolve dependencies
         run: swift package resolve
+      - name: Confirm the dependency pins are committed
+        run: git diff --exit-code Package.resolved
       - name: Run XCTest suite
         run: swift test -Xswiftc -warnings-as-errors
       - name: Run standalone offline checks
@@ -31,3 +33,30 @@ jobs:
           removed_endpoint="hirn""-literature-api"
           pattern="$legacy_name|$legacy_type|$legacy_id|$removed_endpoint"
           ! grep -RIE "$pattern" --exclude-dir=.git --exclude-dir=.build .
+
+  # Exercises the packaging path (bundle assembly, icon rendering, Sparkle
+  # embedding and signing, Info.plist mutation, verify-release.sh) that
+  # otherwise runs only on a release Mac.
+  app-bundle:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Show toolchain
+        run: xcodebuild -version && swift --version
+      - name: Lint release scripts
+        shell: bash
+        run: |
+          command -v shellcheck >/dev/null || brew install shellcheck
+          shellcheck --version
+          shellcheck -S warning Scripts/*.sh
+      - name: Resolve dependencies
+        run: swift package resolve
+      - name: Build and verify the universal app bundle
+        run: BUILD_MODE=development PIN_DEPENDENCIES=1 SKIP_DMG=1 UNIVERSAL=1 ./Scripts/build-app.sh
+      - name: Confirm the bundle carries the license files
+        shell: bash
+        run: |
+          test -f ".build/app/GLKB Cite.app/Contents/Resources/LICENSE.txt"
+          test -f ".build/app/GLKB Cite.app/Contents/Resources/NOTICE.txt"
+          test -f ".build/app/GLKB Cite.app/Contents/Resources/THIRD-PARTY-NOTICES.txt"
