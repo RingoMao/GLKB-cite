@@ -49,7 +49,14 @@ struct CitePanelView: View {
                         Text(style.rawValue)
                             .font(.system(size: 12.5, weight: .bold))
                             .padding(.top, style == CitationFormatter.Style.allCases.first ? 0 : 8)
-                        FormatBox(text: CitationFormatter.citation(for: reference, style: style)) {
+                            // The visible label matches the mockup; the edition or
+                            // variant (e.g. Chicago notes-bibliography) is a tooltip.
+                            .help(style.longName)
+                            .accessibilityLabel(style.longName)
+                        FormatBox(
+                            label: "\(style.longName) citation",
+                            text: CitationFormatter.citation(for: reference, style: style)
+                        ) {
                             copy(CitationFormatter.citation(for: reference, style: style))
                             coordinator.showToast("\(style.rawValue) citation copied to clipboard")
                         }
@@ -96,6 +103,8 @@ struct CitePanelView: View {
 
 /// A citation rendering that copies on click and tints on hover.
 private struct FormatBox: View {
+    /// Accessible name of the control ("APA 7 citation").
+    let label: String
     let text: String
     let action: () -> Void
 
@@ -117,6 +126,9 @@ private struct FormatBox: View {
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
         }
-        .help("Copy this citation")
+        .help("Copy this \(label)")
+        .accessibilityLabel(label)
+        .accessibilityValue(text)
+        .accessibilityHint("Copies the citation to the clipboard")
     }
 }

@@ -24,6 +24,7 @@ public enum ClipboardCaptureError: Error, LocalizedError, Equatable {
     case busy
     case snapshotTooLarge
     case snapshotCouldNotMaterialize
+    case clipboardConcealed
     case sourceApplicationChanged
     case clipboardChangedBeforeCopy
     case copyEventFailed
@@ -42,6 +43,8 @@ public enum ClipboardCaptureError: Error, LocalizedError, Equatable {
             "The clipboard is too large to preserve safely, so GLKB Cite did not copy the selection."
         case .snapshotCouldNotMaterialize:
             "The clipboard contains data that cannot be preserved safely."
+        case .clipboardConcealed:
+            "The clipboard holds concealed content (for example from a password manager), so GLKB Cite did not copy the selection. Copy something else first, or select the text in an app that supports Accessibility."
         case .sourceApplicationChanged:
             "The active application changed before the selection could be captured."
         case .clipboardChangedBeforeCopy:
@@ -49,7 +52,7 @@ public enum ClipboardCaptureError: Error, LocalizedError, Equatable {
         case .copyEventFailed:
             "macOS could not send Copy to the selected application."
         case .copyTimedOut:
-            "The selected application did not provide copied text in time."
+            "The selected application did not provide copied text in time. If it copies later, the previous clipboard content may be replaced by the selection."
         case .copiedTextUnavailable:
             "Copy did not produce usable text."
         case .clipboardChangedDuringCapture:
@@ -72,6 +75,15 @@ public protocol PasteboardAccessing: AnyObject {
 public final class GeneralPasteboardAdapter: PasteboardAccessing {
     private let pasteboard: NSPasteboard
 
+    /// Marker types that password managers and clipboard utilities attach to
+    /// sensitive or temporary items. Such clipboards are never snapshotted:
+    /// materializing them would copy a secret into this process and restoring
+    /// them would republish it as a fresh clipboard change.
+    static let concealedTypes: Set<String> = [
+        "org.nspasteboard.ConcealedType",
+        "org.nspasteboard.TransientType",
+    ]
+
     public init(pasteboard: NSPasteboard = .general) {
         self.pasteboard = pasteboard
     }
@@ -80,8 +92,23 @@ public final class GeneralPasteboardAdapter: PasteboardAccessing {
 
     public func snapshot(maximumBytes: Int) throws -> PasteboardSnapshot {
         let startingChangeCount = pasteboard.changeCount
+        let pasteboardItems = pasteboard.pasteboardItems ?? []
+
+        // Refuse up front, before any data provider is asked for bytes.
+        for item in pasteboardItems {
+            let types = item.types.map(\.rawValue)
+            if types.contains(where: { Self.concealedTypes.contains($0) }) {
+                throw ClipboardCaptureError.clipboardConcealed
+            }
+            // File promises materialize by invoking the promising app's
+            // provider (and may write files); they cannot be round-tripped.
+            if types.contains(where: { $0.hasPrefix("com.apple.pasteboard.promised-") }) {
+                throw ClipboardCaptureError.snapshotCouldNotMaterialize
+            }
+        }
+
         var byteCount = 0
-        let items = try (pasteboard.pasteboardItems ?? []).map { item in
+        let items = try pasteboardItems.map { item in
             let representations = try item.types.map { type in
                 guard let data = item.data(forType: type) else {
                     throw ClipboardCaptureError.snapshotCouldNotMaterialize
@@ -134,7 +161,18 @@ public final class GeneralPasteboardAdapter: PasteboardAccessing {
         guard items.count == snapshot.items.count else { return false }
         pasteboard.clearContents()
         guard !items.isEmpty else { return true }
-        return pasteboard.writeObjects(items)
+        if pasteboard.writeObjects(items) { return true }
+        // The pasteboard server refused the full set. Rather than leave the
+        // clipboard empty, put back at least the original plain text so the
+        // user still has something to paste; the caller still reports failure.
+        if let text = snapshot.items
+            .flatMap(\.representations)
+            .first(where: { $0.typeIdentifier == NSPasteboard.PasteboardType.string.rawValue })
+            .flatMap({ String(data: $0.data, encoding: .utf8) }) {
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+        }
+        return false
     }
 }
 
@@ -177,13 +215,26 @@ public final class ClipboardCompatibilityCapturer {
     private let frontmostProcessIdentifier: ProcessProvider
     private let maximumBytes: Int
     private let timeoutNanoseconds: UInt64
+    private let extendedTimeoutNanoseconds: UInt64
     private let settleNanoseconds: UInt64
     private let pollNanoseconds: UInt64
     private var isCapturing = false
+    /// The user's clipboard as it was before Copy was sent, kept until it has
+    /// been put back, so an interrupted capture (cancellation, quit) can still
+    /// restore it.
+    private var pendingRestore: (snapshot: PasteboardSnapshot, copiedChangeCount: Int)?
 
+    /// - Parameters:
+    ///   - timeoutMilliseconds: how long the target app normally gets to
+    ///     honour Copy.
+    ///   - extendedTimeoutMilliseconds: how long to keep waiting beyond that
+    ///     while the target app is still frontmost, so a slow app that copies
+    ///     late does not leave the user's previous clipboard overwritten
+    ///     after we have already given up. Defaults to four times the timeout.
     public convenience init(
         maximumBytes: Int = 32 * 1_024 * 1_024,
         timeoutMilliseconds: UInt64 = 750,
+        extendedTimeoutMilliseconds: UInt64? = nil,
         settleMilliseconds: UInt64 = 60,
         pollMilliseconds: UInt64 = 15,
         frontmostProcessIdentifier: @escaping ProcessProvider = {
@@ -195,6 +246,7 @@ public final class ClipboardCompatibilityCapturer {
             commandSender: TargetedCopyCommandSender(),
             maximumBytes: maximumBytes,
             timeoutMilliseconds: timeoutMilliseconds,
+            extendedTimeoutMilliseconds: extendedTimeoutMilliseconds,
             settleMilliseconds: settleMilliseconds,
             pollMilliseconds: pollMilliseconds,
             frontmostProcessIdentifier: frontmostProcessIdentifier
@@ -206,6 +258,7 @@ public final class ClipboardCompatibilityCapturer {
         commandSender: any CopyCommandSending,
         maximumBytes: Int = 32 * 1_024 * 1_024,
         timeoutMilliseconds: UInt64 = 750,
+        extendedTimeoutMilliseconds: UInt64? = nil,
         settleMilliseconds: UInt64 = 60,
         pollMilliseconds: UInt64 = 15,
         frontmostProcessIdentifier: @escaping ProcessProvider = {
@@ -217,6 +270,7 @@ public final class ClipboardCompatibilityCapturer {
         self.frontmostProcessIdentifier = frontmostProcessIdentifier
         self.maximumBytes = maximumBytes
         timeoutNanoseconds = timeoutMilliseconds * 1_000_000
+        extendedTimeoutNanoseconds = (extendedTimeoutMilliseconds ?? timeoutMilliseconds * 4) * 1_000_000
         settleNanoseconds = settleMilliseconds * 1_000_000
         pollNanoseconds = max(1, pollMilliseconds) * 1_000_000
     }
@@ -241,23 +295,31 @@ public final class ClipboardCompatibilityCapturer {
 
         var copiedChangeCount: Int?
         var lastChangeAt = ContinuousClock.now
-        let deadline = ContinuousClock.now.advanced(
-            by: .nanoseconds(Int64(clamping: timeoutNanoseconds))
+        let started = ContinuousClock.now
+        let deadline = started.advanced(by: .nanoseconds(Int64(clamping: timeoutNanoseconds)))
+        let extendedDeadline = started.advanced(
+            by: .nanoseconds(Int64(clamping: max(timeoutNanoseconds, extendedTimeoutNanoseconds)))
         )
 
         do {
-            while ContinuousClock.now < deadline {
+            while ContinuousClock.now < extendedDeadline {
                 try Task.checkCancellation()
                 let current = pasteboard.changeCount
                 if current != original.startingChangeCount {
                     if current != copiedChangeCount {
                         copiedChangeCount = current
+                        pendingRestore = (original, current)
                         lastChangeAt = .now
                     } else if ContinuousClock.now - lastChangeAt >= .nanoseconds(
                         Int64(clamping: settleNanoseconds)
                     ) {
                         break
                     }
+                } else if ContinuousClock.now >= deadline,
+                          frontmostProcessIdentifier() != source.processIdentifier {
+                    // Past the normal timeout and the user has moved on; a
+                    // late Copy from that app is no longer expected.
+                    break
                 }
                 try await Task.sleep(nanoseconds: pollNanoseconds)
             }
@@ -274,6 +336,7 @@ public final class ClipboardCompatibilityCapturer {
             guard pasteboard.restore(original, ifCurrentChangeCountIs: copiedChangeCount) else {
                 throw ClipboardCaptureError.clipboardRestoreFailed
             }
+            pendingRestore = nil
 
             let context = SelectionContext(
                 selectedText: normalized,
@@ -288,13 +351,27 @@ public final class ClipboardCompatibilityCapturer {
                 sourceProcessIdentifier: source.processIdentifier
             )
         } catch {
-            if let copiedChangeCount,
-               pasteboard.changeCount == copiedChangeCount,
-               !pasteboard.restore(original, ifCurrentChangeCountIs: copiedChangeCount) {
-                throw ClipboardCaptureError.clipboardRestoreFailed
+            if let copiedChangeCount, pasteboard.changeCount == copiedChangeCount {
+                let restored = pasteboard.restore(original, ifCurrentChangeCountIs: copiedChangeCount)
+                pendingRestore = nil
+                if !restored { throw ClipboardCaptureError.clipboardRestoreFailed }
+            } else if copiedChangeCount != nil {
+                // Someone else changed the clipboard after the copy; the newer
+                // content wins and there is nothing left for us to put back.
+                pendingRestore = nil
             }
             throw error
         }
+    }
+
+    /// Synchronously restores the clipboard if a capture was interrupted
+    /// after Copy had replaced it but before it was put back. Safe to call at
+    /// any time, including from application termination.
+    public func restorePendingSnapshotIfNeeded() {
+        guard let pending = pendingRestore else { return }
+        pendingRestore = nil
+        guard pasteboard.changeCount == pending.copiedChangeCount else { return }
+        _ = pasteboard.restore(pending.snapshot, ifCurrentChangeCountIs: pending.copiedChangeCount)
     }
 }
 
@@ -327,22 +404,20 @@ public final class CompositeSelectionProvider: AsyncSystemSelectionCapturing {
         self.compatibilityEnabled = compatibilityEnabled
     }
 
-    public func captureSelection(allowCompatibility: Bool) async throws -> SystemSelection {
-        try await captureSelection(allowCompatibility: allowCompatibility, expectedProcess: nil)
-    }
-
-    public func captureSelection(allowCompatibility: Bool, expectedProcess: pid_t?) async throws -> SystemSelection {
+    public func captureSelection(_ options: SelectionCaptureOptions) async throws -> SystemSelection {
         do {
-            let selection = try accessibility.captureSelection()
-            if let expectedProcess, selection.sourceProcessIdentifier != expectedProcess {
+            let selection = try accessibility.captureSelection(descendantSearch: options.descendantSearch)
+            if let expected = options.expectedProcess, selection.sourceProcessIdentifier != expected {
                 throw SelectionCaptureError.staleSelection
             }
             return selection
         } catch let SelectionCaptureError.selectionUnavailable(source) {
-            guard allowCompatibility, compatibilityEnabled() else { throw SelectionCaptureError.selectionUnavailable(source: source) }
+            guard options.allowCompatibility, compatibilityEnabled() else {
+                throw SelectionCaptureError.selectionUnavailable(source: source)
+            }
             // Never post Copy into a process other than the one the request
             // was made for.
-            if let expectedProcess, source.processIdentifier != expectedProcess {
+            if let expected = options.expectedProcess, source.processIdentifier != expected {
                 throw SelectionCaptureError.staleSelection
             }
             return try await compatibility.capture(from: source)
@@ -357,10 +432,16 @@ public final class CompositeSelectionProvider: AsyncSystemSelectionCapturing {
         accessibility.gestureLandsInContent(from: start, to: end)
     }
 
+    public func restorePendingClipboardIfNeeded() {
+        compatibility.restorePendingSnapshotIfNeeded()
+    }
+
     public func isStillValid(_ selection: SystemSelection) async -> Bool {
         switch selection.context.captureMethod {
         case .accessibility:
-            guard let current = try? accessibility.captureSelection() else { return false }
+            guard let current = try? accessibility.captureSelection(descendantSearch: .thorough) else {
+                return false
+            }
             return current.sourceProcessIdentifier == selection.sourceProcessIdentifier
                 && current.context.selectedText == selection.context.selectedText
         case .clipboardCompatibility, .service:

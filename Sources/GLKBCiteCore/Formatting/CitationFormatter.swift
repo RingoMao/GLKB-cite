@@ -18,7 +18,22 @@ public enum CitationFormatter {
         case chicago = "Chicago"
         case harvard = "Harvard"
         case vancouver = "Vancouver"
+
+        /// The edition or variant the style follows, for labels with room
+        /// for it (tooltips, accessibility descriptions).
+        public var longName: String {
+            switch self {
+            case .mla: "MLA 9"
+            case .apa: "APA 7"
+            case .chicago: "Chicago 17 (notes-bibliography)"
+            case .harvard: "Harvard (Cite Them Right)"
+            case .vancouver: "Vancouver (NLM)"
+            }
+        }
     }
+
+    /// Shown in place of a missing title so a citation is never a bare year.
+    public static let untitledPlaceholder = "[Untitled]"
 
     /// - Parameter accessDate: the date in Harvard's "Accessed" note. It
     ///   defaults to now and is injectable for deterministic tests.
@@ -28,12 +43,13 @@ public enum CitationFormatter {
         accessDate: Date = Date()
     ) -> String {
         let authors = reference.authors.compactMap(AuthorName.parse)
-        let title = cleanTitle(reference.title)
+        let title = displayTitle(reference.title)
         let titleSentence = endsWithTerminalPunctuation(title) ? title : "\(title)."
         let journal = clean(reference.journal ?? "")
         let year = year(from: reference.date)
-        let pmid = clean(reference.pmid)
-        let url = (PubMed.url(for: reference.pmid) ?? reference.url)?.absoluteString ?? ""
+        let pmid = PubMed.canonicalPMID(reference.pmid) ?? ""
+        let pubmedURL = PubMed.url(for: reference.pmid)
+        let url = (pubmedURL ?? webURL(reference.url))?.absoluteString ?? ""
 
         switch style {
         case .mla:
@@ -42,7 +58,10 @@ public enum CitationFormatter {
             if let head = authorBlock(authors, style: style) { parts.append(head) }
             parts.append("\u{201C}\(titleSentence)\u{201D}")
             parts += container(journal, year, separator: ", ", undated: nil)
-            if !url.isEmpty { parts.append("PubMed, \(url).") }
+            if !url.isEmpty {
+                // The database name belongs only to a PubMed locator.
+                parts.append(pubmedURL != nil ? "PubMed, \(url)." : "\(url).")
+            }
             return parts.joined(separator: " ")
 
         case .apa:
@@ -97,8 +116,7 @@ public enum CitationFormatter {
 
     /// BibTeX `@article` entry.
     public static func bibtex(for reference: LiteratureReference) -> String {
-        let pmid = clean(reference.pmid)
-        let key = pmid.isEmpty ? "glkb" : "pmid\(pmid)"
+        let pmid = PubMed.canonicalPMID(reference.pmid) ?? ""
         let authors = reference.authors.compactMap(AuthorName.parse)
         // Field values are escaped here, piece by piece, so the braces that
         // protect a group author's name survive.
@@ -106,29 +124,34 @@ public enum CitationFormatter {
         if !authors.isEmpty {
             fields.append(("author", authors.map { $0.bibtex(escaping: escapeBibTeX) }.joined(separator: " and ")))
         }
-        fields.append(("title", escapeBibTeX(cleanTitle(reference.title))))
+        // The inner braces keep the title's capitalisation as written; most
+        // BibTeX styles lower-case an unprotected title.
+        fields.append(("title", "{\(escapeBibTeX(displayTitle(reference.title)))}"))
         if let journal = reference.journal, !clean(journal).isEmpty {
             fields.append(("journal", escapeBibTeX(clean(journal))))
         }
         let year = year(from: reference.date)
         if !year.isEmpty { fields.append(("year", year)) }
         if !pmid.isEmpty { fields.append(("pmid", pmid)) }
-        if let url = PubMed.url(for: reference.pmid) ?? reference.url {
-            fields.append(("url", escapeBibTeX(url.absoluteString)))
+        if let url = PubMed.url(for: reference.pmid) ?? webURL(reference.url) {
+            // URLs are not TeX-escaped: the url/hyperref packages read the
+            // field verbatim, and an escaped "%" would break the link.
+            fields.append(("url", url.absoluteString.filter { $0 != "{" && $0 != "}" && !$0.isWhitespace }))
         }
         let body = fields
             .map { "  \($0.0) = {\($0.1)}" }
             .joined(separator: ",\n")
-        return "@article{\(key),\n\(body)\n}"
+        return "@article{\(bibtexKey(for: reference)),\n\(body)\n}"
     }
 
-    /// EndNote-compatible RIS record.
+    /// EndNote-compatible RIS record: CRLF line ends and a terminating
+    /// newline, as the RIS specification and EndNote's importer expect.
     public static func ris(for reference: LiteratureReference) -> String {
         var lines = ["TY  - JOUR"]
         for author in reference.authors.compactMap(AuthorName.parse) {
             lines.append("AU  - \(author.ris)")
         }
-        lines.append("TI  - \(cleanTitle(reference.title))")
+        lines.append("TI  - \(displayTitle(reference.title))")
         if let journal = reference.journal, !clean(journal).isEmpty {
             // T2 is the periodical title for a journal article; JO is an
             // abbreviation field that EndNote files as "Alternate Journal".
@@ -136,16 +159,16 @@ public enum CitationFormatter {
         }
         let year = year(from: reference.date)
         if !year.isEmpty { lines.append("PY  - \(year)") }
-        let pmid = clean(reference.pmid)
+        let pmid = PubMed.canonicalPMID(reference.pmid) ?? ""
         if !pmid.isEmpty {
             lines.append("AN  - \(pmid)")
             lines.append("DB  - PubMed")
         }
-        if let url = PubMed.url(for: reference.pmid) ?? reference.url {
+        if let url = PubMed.url(for: reference.pmid) ?? webURL(reference.url) {
             lines.append("UR  - \(url.absoluteString)")
         }
         lines.append("ER  - ")
-        return lines.joined(separator: "\n")
+        return lines.joined(separator: "\r\n") + "\r\n"
     }
 
     // MARK: - Author lists
@@ -230,20 +253,31 @@ public enum CitationFormatter {
 
     // MARK: - Pieces
 
-    /// Extracts a 4-digit year from free-form date text such as
-    /// `"2024"`, `"2024 Mar"`, or `"2024-03-12"`.
-    private static func year(from date: String?) -> String {
+    /// Years a publication date can plausibly carry. Anything else in the
+    /// date text (page-like numbers, "0000", non-ASCII digits) is ignored.
+    static let plausibleYears = 1500 ... 2100
+
+    /// Extracts a 4-digit year from free-form date text such as `"2024"`,
+    /// `"2024 Mar"`, `"2024-03-12"` or `"20240312"`. Only ASCII digits
+    /// count; `Character.isNumber` would also accept superscripts, Arabic-
+    /// Indic digits and fractions.
+    static func year(from date: String?) -> String {
         guard let date else { return "" }
-        var digits = ""
-        for character in date {
-            if character.isNumber {
-                digits.append(character)
-                if digits.count == 4 { return digits }
+        func year(in run: String) -> String? {
+            let digits = run.count == 8 ? String(run.prefix(4)) : run
+            guard digits.count == 4, let value = Int(digits), plausibleYears.contains(value) else { return nil }
+            return digits
+        }
+        var run = ""
+        for scalar in date.unicodeScalars {
+            if scalar.isASCII, ("0" ... "9").contains(scalar) {
+                run.unicodeScalars.append(scalar)
             } else {
-                digits = ""
+                if let found = year(in: run) { return found }
+                run = ""
             }
         }
-        return ""
+        return year(in: run) ?? ""
     }
 
     private static func harvardDate(_ date: Date) -> String {
@@ -262,7 +296,12 @@ public enum CitationFormatter {
     private static func cleanTitle(_ value: String) -> String {
         var title = clean(value)
         while title.hasSuffix(".") { title.removeLast() }
-        return title
+        return clean(title)
+    }
+
+    private static func displayTitle(_ value: String) -> String {
+        let title = cleanTitle(value)
+        return title.isEmpty ? untitledPlaceholder : title
     }
 
     /// A title ending in "?" or "!" keeps that mark instead of gaining a
@@ -271,11 +310,40 @@ public enum CitationFormatter {
         title.hasSuffix("?") || title.hasSuffix("!")
     }
 
-    private static func escapeBibTeX(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\\", with: "\\textbackslash{}")
-            .replacingOccurrences(of: "{", with: "\\{")
-            .replacingOccurrences(of: "}", with: "\\}")
+    /// Only web URLs are cited; a reference built by hand could carry any
+    /// scheme.
+    private static func webURL(_ url: URL?) -> URL? {
+        guard let url, let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else {
+            return nil
+        }
+        return url
+    }
+
+    /// A key BibTeX accepts: `pmid` plus the number, or `glkb` with whatever
+    /// ASCII letters and digits a non-PubMed identifier contains.
+    private static func bibtexKey(for reference: LiteratureReference) -> String {
+        if let pmid = PubMed.canonicalPMID(reference.pmid) { return "pmid\(pmid)" }
+        let safe = reference.pmid.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        return safe.isEmpty ? "glkb" : "glkb-\(safe)"
+    }
+
+    /// Escapes every TeX special character in one pass, so no replacement
+    /// can re-match the output of an earlier one.
+    static func escapeBibTeX(_ value: String) -> String {
+        var output = ""
+        output.reserveCapacity(value.count)
+        for character in value {
+            switch character {
+            case "\\": output += "\\textbackslash{}"
+            case "{": output += "\\{"
+            case "}": output += "\\}"
+            case "%", "&", "_", "#", "$": output += "\\\(character)"
+            case "~": output += "\\textasciitilde{}"
+            case "^": output += "\\textasciicircum{}"
+            default: output.append(character)
+            }
+        }
+        return output
     }
 }
 
@@ -294,7 +362,12 @@ struct AuthorName: Equatable {
 
     /// Accepts "Caelles C", "Caelles CA", "C Caelles", "C A Caelles",
     /// "Caelles, Carme", "Carme Caelles", "J van der Berg", "Smith J Jr",
-    /// and group names. Returns nil for an empty string.
+    /// "Smith III", "Smith, Jr." and group names. Returns nil for an empty
+    /// string.
+    ///
+    /// Two shapes stay ambiguous and follow the PubMed/GLKB convention:
+    /// "M Garcia Lopez" is a compound surname (not a given name "Garcia"),
+    /// and "Ivanov IV" has the initials I. V. (not a suffix).
     static func parse(_ raw: String) -> AuthorName? {
         let text = LiteratureNetworking.clean(raw)
         guard !text.isEmpty else { return nil }
@@ -303,18 +376,19 @@ struct AuthorName: Equatable {
         }
 
         if let comma = text.firstIndex(of: ",") {
-            // "Surname, Given Names[, Suffix]"
+            // "Surname, Given Names[, Suffix]" — the surname is already
+            // separated, so the suffix may be the only thing after the comma.
             let surname = text[..<comma].trimmingCharacters(in: .whitespaces)
             var given = text[text.index(after: comma)...]
                 .split(whereSeparator: { $0 == "," || $0.isWhitespace })
                 .map(String.init)
-            let suffix = takeSuffix(&given)
+            let suffix = takeSuffix(&given, minimumRemaining: 0)
             guard !surname.isEmpty else { return nil }
             return AuthorName(surname: surname, givenNames: given, suffix: suffix, isCorporate: false)
         }
 
         var tokens = text.split(separator: " ").map(String.init)
-        let suffix = takeSuffix(&tokens)
+        let suffix = takeSuffix(&tokens, minimumRemaining: 1)
         guard let first = tokens.first else { return nil }
         if tokens.count == 1 {
             return AuthorName(surname: first, givenNames: [], suffix: suffix, isCorporate: false)
@@ -455,21 +529,32 @@ struct AuthorName: Equatable {
         "bin", "ibn", "al", "el", "y", "e", "of",
     ]
 
+    /// "van", and capitalised forms of two or more letters ("Van", "De"):
+    /// single letters stay initials ("J Y Lee").
     private static func isParticle(_ token: String) -> Bool {
-        token == token.lowercased() && particles.contains(token)
+        let lower = token.lowercased()
+        guard particles.contains(lower) else { return false }
+        if token == lower { return true }
+        return token.count >= 2 && token == lower.prefix(1).uppercased() + lower.dropFirst()
     }
 
     private static let suffixes: Set<String> = ["jr", "sr", "ii", "iii", "iv", "2nd", "3rd"]
 
-    /// Removes a trailing generational suffix and returns it.
-    private static func takeSuffix(_ tokens: inout [String]) -> String? {
-        guard tokens.count > 1, let last = tokens.last else { return nil }
+    private static func isSuffixToken(_ token: String) -> Bool {
+        suffixes.contains(token.trimmingCharacters(in: CharacterSet(charactersIn: ".,")).lowercased())
+    }
+
+    /// Removes a trailing generational suffix and returns it. At least
+    /// `minimumRemaining` tokens must stay (the surname in a plain name;
+    /// nothing after a comma, where the surname is already separated).
+    private static func takeSuffix(_ tokens: inout [String], minimumRemaining: Int) -> String? {
+        guard tokens.count > minimumRemaining, let last = tokens.last else { return nil }
         let bare = last.trimmingCharacters(in: CharacterSet(charactersIn: ".,"))
         let key = bare.lowercased()
         guard suffixes.contains(key) else { return nil }
-        // "II"/"III"/"IV" could be initials in a two-token name; require a
-        // given name as well before treating them as a suffix.
-        if key.hasPrefix("i"), tokens.count < 3 { return nil }
+        // "II"/"IV" are also plausible initials ("Ivanov IV"); only treat
+        // them as a suffix once a given name is present as well.
+        if ["ii", "iv"].contains(key), tokens.count < minimumRemaining + 2 { return nil }
         tokens.removeLast()
         return bare
     }
@@ -483,13 +568,25 @@ struct AuthorName: Equatable {
         "registry", "task force",
     ]
 
-    /// Group authors contain digits or an organisational word.
+    /// Group authors contain digits or an organisational word. A trailing
+    /// generational suffix ("2nd") is not a digit of a group name, and a
+    /// marker word next to an initial ("Study A", "A Study") is a person's
+    /// surname, as is a marker word on its own.
     private static func looksCorporate(_ text: String) -> Bool {
-        if text.contains(where: \.isNumber) { return true }
-        let lower = text.lowercased()
-        let words = Set(lower.split(whereSeparator: { !$0.isLetter && $0 != "-" }).map(String.init))
-        return corporateMarkers.contains { marker in
-            marker.contains(" ") ? lower.contains(marker) : words.contains(marker)
+        var words = text.split(whereSeparator: { $0.isWhitespace || $0 == "," }).map(String.init)
+        while words.count > 1, let last = words.last, isSuffixToken(last) { words.removeLast() }
+        if words.contains(where: { $0.contains(where: \.isNumber) }) { return true }
+
+        let lowered = words.map { word in String(word.lowercased().filter { $0.isLetter || $0 == "-" }) }
+        let joined = lowered.joined(separator: " ")
+        for marker in corporateMarkers where marker.contains(" ") {
+            if joined.contains(marker) { return true }
+        }
+        guard lowered.contains(where: corporateMarkers.contains) else { return false }
+        switch lowered.count {
+        case 1: return false
+        case 2: return !words.contains(where: isInitialsToken)
+        default: return true
         }
     }
 }

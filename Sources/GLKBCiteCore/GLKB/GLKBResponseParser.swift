@@ -1,6 +1,10 @@
 import Foundation
 
 public enum GLKBResponseParser {
+    /// Citation counts above this are not plausible for a PubMed article and
+    /// are treated as absent rather than displayed.
+    static let maximumCitationCount = 10_000_000
+
     public static func parse(
         _ data: Data,
         options: LiteratureQueryOptions = .init()
@@ -28,7 +32,10 @@ public enum GLKBResponseParser {
         var references: [LiteratureReference] = []
         var seenPMIDs = Set<String>()
 
-        for rawReference in rawReferences {
+        // Scan a bounded number of raw entries: the loop stops after
+        // `maxArticles` valid references, so without a cap a response of
+        // millions of invalid entries would be scanned in full.
+        for rawReference in rawReferences.prefix(Self.maximumScannedReferences) {
             guard let reference = normalizeReference(rawReference) else { continue }
             guard !seenPMIDs.contains(reference.pmid) else { continue }
             seenPMIDs.insert(reference.pmid)
@@ -52,16 +59,17 @@ public enum GLKBResponseParser {
         )
     }
 
+    static let maximumScannedReferences = 500
+
     private static func normalizeReference(_ value: Any) -> LiteratureReference? {
         if let array = value as? [Any] {
             let title = valueAt(array, 0).map(string) ?? ""
             let urlString = valueAt(array, 1).map(string) ?? ""
-            let pmid = pmid(from: urlString)
-            guard !title.isEmpty, !pmid.isEmpty else { return nil }
+            guard !title.isEmpty, let pmid = pmid(from: urlString) else { return nil }
             return LiteratureReference(
                 pmid: pmid,
                 title: title,
-                url: normalizedURL(urlString, pmid: pmid),
+                url: PubMed.url(for: pmid),
                 authors: stringArray(valueAt(array, 5)),
                 journal: nilIfEmpty(valueAt(array, 4).map(string) ?? ""),
                 date: nilIfEmpty(valueAt(array, 3).map(string) ?? ""),
@@ -72,22 +80,24 @@ public enum GLKBResponseParser {
 
         guard let dictionary = value as? [String: Any] else { return nil }
         let urlString = firstString(in: dictionary, keys: ["url"])
-        let pmidValue = firstString(in: dictionary, keys: ["pmid", "pubmedid", "id"])
-        let pmid = pmidValue.isEmpty ? pmid(from: urlString) : pmidValue
+        // Only PubMed identifiers name a reference; a generic `id` could be a
+        // database row id and would be linked as if it were a PMID.
+        let pmidValue = firstString(in: dictionary, keys: ["pmid", "pubmedid"])
+        let pmid = PubMed.canonicalPMID(pmidValue) ?? self.pmid(from: urlString)
         let title = firstString(in: dictionary, keys: ["title"])
-        guard !pmid.isEmpty,
-              pmid.allSatisfy(\.isNumber),
-              !title.isEmpty else { return nil }
+        guard let pmid, !title.isEmpty else { return nil }
 
         let evidence = (dictionary["evidence"] as? [Any] ?? []).compactMap(normalizeEvidence)
         return LiteratureReference(
             pmid: pmid,
             title: title,
-            url: normalizedURL(urlString, pmid: pmid),
+            // Always the canonical PubMed URL; a server-supplied URL is never
+            // opened from the app.
+            url: PubMed.url(for: pmid),
             authors: stringArray(dictionary["authors"]),
             journal: nilIfEmpty(firstString(in: dictionary, keys: ["journal"])),
             date: nilIfEmpty(firstString(in: dictionary, keys: ["date", "year"])),
-            citationCount: integer(dictionary["n_citation"] ?? dictionary["citation_count"]),
+            citationCount: integer(dictionary["n_citation"]) ?? integer(dictionary["citation_count"]),
             relevanceReason: nilIfEmpty(firstString(in: dictionary, keys: ["why"])),
             evidence: evidence
         )
@@ -121,10 +131,17 @@ public enum GLKBResponseParser {
         case let string as String:
             return clean(string)
         case let number as NSNumber:
+            // JSON true/false arrive as NSNumber; "1"/"0" is never the
+            // intended text.
+            guard !isBoolean(number) else { return "" }
             return clean(number.stringValue)
         default:
             return ""
         }
+    }
+
+    private static func isBoolean(_ number: NSNumber) -> Bool {
+        CFGetTypeID(number) == CFBooleanGetTypeID()
     }
 
     private static func clean(_ string: String) -> String {
@@ -139,17 +156,29 @@ public enum GLKBResponseParser {
         (value as? [Any] ?? []).map(string).filter { !$0.isEmpty }
     }
 
+    /// A non-negative, plausible integer, or nil. Out-of-range numbers
+    /// (`1.5e20`, 30-digit decimals) would otherwise saturate or wrap into
+    /// garbage counts.
     private static func integer(_ value: Any?) -> Int? {
+        let candidate: Double?
         switch value {
-        case let number as NSNumber: number.intValue
-        case let string as String: Int(string)
-        default: nil
+        case let number as NSNumber:
+            guard !isBoolean(number) else { return nil }
+            candidate = number.doubleValue
+        case let string as String:
+            candidate = Double(string.trimmingCharacters(in: .whitespaces))
+        default:
+            candidate = nil
         }
+        guard let candidate, candidate.isFinite, candidate >= 0,
+              candidate <= Double(maximumCitationCount),
+              candidate == candidate.rounded() else { return nil }
+        return Int(candidate)
     }
 
     private static func double(_ value: Any?) -> Double? {
         switch value {
-        case let number as NSNumber: number.doubleValue
+        case let number as NSNumber: isBoolean(number) ? nil : number.doubleValue
         case let string as String: Double(string)
         default: nil
         }
@@ -159,10 +188,10 @@ public enum GLKBResponseParser {
         array.indices.contains(index) ? array[index] : nil
     }
 
-    private static func pmid(from url: String) -> String {
+    private static func pmid(from url: String) -> String? {
         guard
             let expression = try? NSRegularExpression(
-                pattern: #"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)"#,
+                pattern: #"pubmed\.ncbi\.nlm\.nih\.gov/([0-9]+)"#,
                 options: [.caseInsensitive]
             ),
             let match = expression.firstMatch(
@@ -170,20 +199,7 @@ public enum GLKBResponseParser {
                 range: NSRange(url.startIndex..., in: url)
             ),
             let range = Range(match.range(at: 1), in: url)
-        else { return "" }
-        return String(url[range])
+        else { return nil }
+        return PubMed.canonicalPMID(String(url[range]))
     }
-
-    private static func normalizedURL(_ value: String, pmid: String) -> URL? {
-        if let pubMedURL = PubMed.url(for: pmid) {
-            return pubMedURL
-        }
-        if let url = URL(string: value),
-           url.scheme?.lowercased() == "https",
-           url.host != nil {
-            return url
-        }
-        return nil
-    }
-
 }

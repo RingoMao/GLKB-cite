@@ -8,8 +8,8 @@ authors:
 repository-code: https://github.com/RingoMao/GLKB-cite
 url: https://github.com/RingoMao/GLKB-cite
 license: Apache-2.0
-version: 0.1.1
-date-released: 2026-09-03
+version: 0.2.0
+date-released: 2026-10-09
 preferred-citation:
   type: article
   title: Building a literature knowledge base towards transparent biomedical AI

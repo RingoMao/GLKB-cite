@@ -22,18 +22,20 @@ setup, everyday use, and troubleshooting.
 5. Open **GLKB Cite** from `/Applications` (not the copy inside the disk
    image). It appears as a GLKB icon in the menu bar; there is no Dock icon.
 
+<!-- unsigned-only:start -->
 ### If macOS says the app "is damaged and can't be opened"
 
-Test builds are not yet notarized by Apple, and any download carries macOS's
-quarantine flag. Together those produce a misleading "damaged" message —
-nothing is actually damaged — and on macOS 15 Sequoia and later there is no
-**Open Anyway** button for this case. Remove the quarantine flag yourself.
+This build is an unsigned test build, not notarized by Apple, and any download
+carries macOS's quarantine flag. Together those produce a misleading "damaged"
+message — nothing is actually damaged — and on macOS 15 Sequoia and later
+there is no **Open Anyway** button for this case. Remove the quarantine flag
+yourself.
 
 Preferably, run this on the disk image **before** opening it (adjust the path
 if your download went elsewhere), then install as above:
 
 ```bash
-xattr -d com.apple.quarantine ~/Downloads/"GLKB Cite 0.2.0.dmg"
+xattr -d com.apple.quarantine ~/Downloads/GLKB\ Cite*.dmg
 ```
 
 If you already dragged the app to Applications, clear it there instead:
@@ -43,7 +45,8 @@ xattr -dr com.apple.quarantine "/Applications/GLKB Cite.app"
 ```
 
 Only do this for a build you received directly from the GLKB Cite team.
-Notarized releases will open with a plain double-click and need none of this.
+Notarized releases open with a plain double-click and need none of this.
+<!-- unsigned-only:end -->
 
 ## 2. First launch: the setup wizard
 
@@ -59,9 +62,10 @@ A four-step window opens the first time GLKB Cite runs.
 3. **Store your GLKB key** — paste your `glkb_` key and click **Save**, then
    **Continue**. The key is stored only in your macOS Keychain and sent only
    to the GLKB endpoint.
-4. **Compatibility Capture and privacy** — read the disclosure and click
-   **Finish Setup**. (The button stays disabled until steps 2 and 3 are
-   complete.)
+4. **Your choices** — decide whether to show the selection badge and whether
+   to allow the temporary Copy fallback (both switches are on this step and
+   can be changed later in Settings), then click **Finish Setup**. The button
+   stays disabled until steps 2 and 3 are complete.
 
 If macOS asks *"GLKB Cite wants to use your confidential information stored in
 org.glkb.cite"*, click **Always Allow**. This is the Keychain protecting your
@@ -94,9 +98,10 @@ while it remains open. Press **Esc** or click **✕** to close it.
   numbered, with authors, year, journal, and a supporting excerpt you can
   expand.
 - Click a reference's **PMID** to open it on PubMed.
-- Hover over a reference and click **Cite** to get MLA, APA, Chicago,
-  Harvard, and Vancouver renderings — click any of them to copy it — plus
-  **BibTeX** and **EndNote** (RIS) exports.
+- Hover over a reference (or Tab to it with Full Keyboard Access) and click
+  **Cite** to get MLA 9, APA 7, Chicago (notes-bibliography), Harvard and
+  Vancouver (NLM) renderings — click any of them to copy it — plus **BibTeX**
+  and **EndNote** (RIS) exports.
 - **Copy Plain Text** and **Copy Rich Report** copy the whole result list for
   pasting into notes or a document.
 
@@ -107,12 +112,13 @@ clinical decision tool.
 
 Some apps (PDF Expert and several other PDF viewers, drawing canvases) do not
 expose selected text to macOS Accessibility. When **Allow temporary Copy
-fallback** is enabled (Settings → Privacy; the wizard turns it on), GLKB Cite
-still offers a badge after a deliberate drag or double-click in such an app.
-Only when you click that badge does it briefly issue *Copy* to read the
-selection, then restore your previous clipboard. `⌥⌘G` and the menu command
-use the same fallback. Clipboard-history utilities may record the temporary
-value; turn the fallback off if that matters to you.
+fallback** is enabled (the setup wizard asks; Settings → Privacy changes it),
+GLKB Cite still offers a badge after a deliberate drag or double-click in such
+an app. Only when you click that badge does it briefly issue *Copy* to read
+the selection, then restore your previous clipboard. `⌥⌘G` and the menu
+command use the same fallback. It never touches a clipboard holding an item
+marked concealed by a password manager. Clipboard-history utilities may record
+the temporary value; turn the fallback off if that matters to you.
 
 ## 4. Settings
 
@@ -121,26 +127,31 @@ open).
 
 - **General** — show or hide the automatic selection badge, see the `⌥⌘G` hot
   key, and enable *Launch at login*.
-- **Literature** — replace the API key (the field shows the stored key
-  masked), include or omit evidence excerpts, and set how long results are
-  cached in memory (Off, 5 min, 15 min, 1 hour). The cache is cleared when the
-  app quits.
+- **Literature** — replace or remove the API key (the field shows that a key
+  is stored, never the key itself), include or omit evidence excerpts, and set
+  how long results are cached in memory (Off, 5 min, 15 min, 1 hour). The
+  cache is cleared when the app quits.
 - **Privacy** — turn the temporary Copy fallback on or off and review what
   leaves your Mac.
+
+Release builds that ship with an update channel add **Check for Updates…** to
+the menu-bar menu; test builds have no update channel and show no such item.
 
 ## 5. Upgrading
 
 Quit GLKB Cite, replace the app in Applications with the new copy, and launch
-it. Because test builds are not signed with a persistent identity, macOS
-treats each new build as a different app:
+it. Your settings and API key are kept across upgrades.
+
+<!-- unsigned-only:start -->
+Because test builds are not signed with a persistent identity, macOS treats
+each new build as a different app:
 
 - Accessibility access must be granted again. The app asks at launch; if it
   does not, open *Privacy & Security → Accessibility*, remove the old GLKB
   Cite entry, click **+**, add `/Applications/GLKB Cite.app`, and enable it.
 - The Keychain asks once for permission to read the stored key: **Always
   Allow**.
-
-Your settings and API key are kept across upgrades.
+<!-- unsigned-only:end -->
 
 ## 6. Troubleshooting
 
@@ -148,17 +159,20 @@ Your settings and API key are kept across upgrades.
 
 1. Check that **Show Selection Badge** is ticked in the menu-bar menu.
 2. Check that **GLKB Cite** is enabled and points at `/Applications/GLKB
-   Cite.app` in *Privacy & Security → Accessibility*. After an upgrade the
-   toggle can look enabled while being stale — remove and re-add it.
+   Cite.app` in *Privacy & Security → Accessibility*. If access was revoked
+   or went stale after an upgrade, the menu shows **Accessibility Access
+   Needed…**; choose it to reopen the settings pane, then remove and re-add
+   the entry if the toggle looks enabled but nothing happens.
 3. Select with a real drag or a double-click; a single click never triggers
    the badge.
 4. In a PDF viewer or similar app, make sure **Allow temporary Copy fallback**
    is on (Settings → Privacy).
 5. `⌥⌘G` works even when the badge cannot, so use it as a fallback.
 
-To see exactly why a capture failed, turn on diagnostics (they record element
-types and error codes only — never the selected text), reproduce, then read
-the log:
+To see exactly why a capture failed, turn on diagnostics (they record the
+capture strategy, element roles, character counts, error codes and the bundle
+identifier of the app you selected in — never the selected text), reproduce,
+then read the log:
 
 ```bash
 defaults write org.glkb.cite diagnostics.captureLoggingEnabled -bool true
@@ -179,8 +193,14 @@ GLKB Cite. Settings → General notes when the shortcut could not be registered.
 ### "GLKB rejected this API key"
 
 The stored key is inactive or mistyped. Open Settings → Literature, paste a
-current `glkb_` key, and click **Save**. Never send a key in a bug report or
-screenshot.
+current `glkb_` key, and click **Save**. A key pasted with a line break in it
+is refused on saving; paste it as one line. Never send a key in a bug report
+or screenshot.
+
+### "GLKB declined this request"
+
+Usage or rate limits were reached. The message says how long to wait when the
+service tells us; otherwise check the account before retrying.
 
 ### "No citation result is available yet"
 
@@ -196,8 +216,8 @@ If you have dragged it, it keeps that position until closed; close it with
 ## 7. Uninstall
 
 Quit GLKB Cite and move `/Applications/GLKB Cite.app` to the Trash. To remove
-your API key, open Keychain Access and delete the `org.glkb.cite` item. To
-remove preferences, run:
+your API key, use **Remove** in Settings → Literature, or delete the
+`org.glkb.cite` item in Keychain Access. To remove preferences, run:
 
 ```bash
 defaults delete org.glkb.cite
@@ -208,4 +228,5 @@ defaults delete org.glkb.cite
 The selected text is sent to the GLKB endpoint only when you ask for
 citations. The API key lives in your Keychain. Results may be cached in memory
 until the app quits. There are no analytics and no history of your queries.
-See `PRIVACY.md` in the repository for the full notice.
+See `PRIVACY.md` in the repository for the full notice, including what the
+optional selection badge observes locally.

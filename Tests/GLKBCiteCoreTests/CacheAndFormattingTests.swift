@@ -139,6 +139,95 @@ final class CacheAndFormattingTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    func testCancelledMemberReturnsAtOnceWhileOthersKeepTheSharedRequest() async throws {
+        let inFlight = InFlightLiteratureRequests()
+        let observer = CancellationObserver()
+        let key = LiteratureCacheKey(digest: "shared")
+        let expected = fixtureResult()
+        let slow: @Sendable () async throws -> LiteratureResult = {
+            do {
+                try await Task.sleep(nanoseconds: 400_000_000)
+            } catch {
+                await observer.markCancelled()
+                throw error
+            }
+            return expected
+        }
+        let first = Task { try await inFlight.result(for: key, operation: slow) }
+        let second = Task { try await inFlight.result(for: key, operation: slow) }
+        try await Task.sleep(nanoseconds: 40_000_000)
+        let countWhileShared = await inFlight.count
+        XCTAssertEqual(countWhileShared, 1)
+
+        let clock = ContinuousClock()
+        let cancelledAt = clock.now
+        first.cancel()
+        let firstOutcome = await first.result
+        XCTAssertLessThan(clock.now - cancelledAt, .milliseconds(250))
+        guard case .failure(let error) = firstOutcome else { return XCTFail("Expected cancellation") }
+        XCTAssertTrue(error is CancellationError, "\(error)")
+
+        let secondResult = try await second.value
+        XCTAssertEqual(secondResult, expected)
+        let wasCancelled = await observer.cancelled
+        XCTAssertFalse(wasCancelled)
+        let countAfter = await inFlight.count
+        XCTAssertEqual(countAfter, 0)
+    }
+
+    func testLastMemberLeavingCancelsTheSharedRequest() async throws {
+        let inFlight = InFlightLiteratureRequests()
+        let observer = CancellationObserver()
+        let key = LiteratureCacheKey(digest: "abandoned")
+        let slow: @Sendable () async throws -> LiteratureResult = {
+            do {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+            } catch {
+                await observer.markCancelled()
+                throw error
+            }
+            return LiteratureResult(answer: "late", references: [])
+        }
+        let first = Task { try await inFlight.result(for: key, operation: slow) }
+        let second = Task { try await inFlight.result(for: key, operation: slow) }
+        try await Task.sleep(nanoseconds: 40_000_000)
+        first.cancel()
+        second.cancel()
+        _ = await first.result
+        _ = await second.result
+        try await Task.sleep(nanoseconds: 60_000_000)
+        let wasCancelled = await observer.cancelled
+        XCTAssertTrue(wasCancelled, "the paid request kept running with nobody waiting")
+        let count = await inFlight.count
+        XCTAssertEqual(count, 0)
+
+        // A later caller for the same key starts a fresh request.
+        let fresh = try await inFlight.result(for: key) { LiteratureResult(answer: "fresh", references: []) }
+        XCTAssertEqual(fresh.answer, "fresh")
+    }
+
+    func testCachingDecoratorPropagatesCancellationToTheBackend() async throws {
+        let counter = AsyncCounter()
+        let observer = CancellationObserver()
+        let backend = ObservingBackend(counter: counter, observer: observer, result: fixtureResult())
+        let caching = CachingLiteratureBackend(backend: backend, endpointScope: "fixture")
+        let query = LiteratureQuery(
+            text: "A cancellable scientific claim for citation retrieval.",
+            options: .init(cacheDurationMinutes: 15)
+        )
+        // Named explicitly: `Self.` inside the closure makes older Swift 6
+        // compilers capture the (non-Sendable) test case.
+        let consumer = Task { try await CacheAndFormattingTests.completedResult(from: caching.query(query)) }
+        try await Task.sleep(nanoseconds: 40_000_000)
+        consumer.cancel()
+        _ = await consumer.result
+        try await Task.sleep(nanoseconds: 60_000_000)
+        let wasCancelled = await observer.cancelled
+        XCTAssertTrue(wasCancelled)
+        let count = await counter.value
+        XCTAssertEqual(count, 1)
+    }
+
     func testPubMedURLsAreStrictAndDeduplicated() {
         XCTAssertEqual(
             PubMed.url(for: " 38743124 ")?.absoluteString,
@@ -240,6 +329,36 @@ private final class FixtureClock: @unchecked Sendable {
 private actor AsyncCounter {
     private(set) var value = 0
     func increment() { value += 1 }
+}
+
+private actor CancellationObserver {
+    private(set) var cancelled = false
+    func markCancelled() { cancelled = true }
+}
+
+/// A slow backend that records whether its request was cancelled.
+private struct ObservingBackend: LiteratureBackend {
+    let counter: AsyncCounter
+    let observer: CancellationObserver
+    let result: LiteratureResult
+
+    func query(_ query: LiteratureQuery) -> AsyncThrowingStream<LiteratureQueryEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                await counter.increment()
+                do {
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                } catch {
+                    await observer.markCancelled()
+                    continuation.finish(throwing: LiteratureError.cancelled)
+                    return
+                }
+                continuation.yield(.completed(result))
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
+    }
 }
 
 private struct FixtureBackend: LiteratureBackend {
