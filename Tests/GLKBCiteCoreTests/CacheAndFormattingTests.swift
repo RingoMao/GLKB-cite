@@ -215,7 +215,9 @@ final class CacheAndFormattingTests: XCTestCase {
             text: "A cancellable scientific claim for citation retrieval.",
             options: .init(cacheDurationMinutes: 15)
         )
-        let consumer = Task { try await Self.completedResult(from: caching.query(query)) }
+        // Named explicitly: `Self.` inside the closure makes older Swift 6
+        // compilers capture the (non-Sendable) test case.
+        let consumer = Task { try await CacheAndFormattingTests.completedResult(from: caching.query(query)) }
         try await Task.sleep(nanoseconds: 40_000_000)
         consumer.cancel()
         _ = await consumer.result

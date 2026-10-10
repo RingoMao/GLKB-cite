@@ -63,8 +63,8 @@ else
     todo "profile '$PROFILE' is missing or invalid."
     cat <<STEPS
     You need an app-specific password for your Apple ID:
-      a. Sign in at https://account.apple.com → Sign-In and Security → App-Specific Passwords → “+”.
-      b. Name it “GLKB Cite notarization” and copy the generated password.
+      a. Sign in at https://account.apple.com → Sign-In and Security → App-Specific Passwords → "+".
+      b. Name it "GLKB Cite notarization" and copy the generated password.
     notarytool will now prompt you for: Apple ID (email), Team ID (${TEAM_ID:-from step 2}), and that password.
     The values are stored in your Keychain — they are not echoed, logged, or seen by anyone else.
 
