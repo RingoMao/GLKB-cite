@@ -94,6 +94,54 @@ final class GLKBRequestAndResponseTests: XCTestCase {
         XCTAssertThrowsError(try GLKBResponseParser.parse(data))
     }
 
+    func testPMIDsAreCanonicalizedAndNonPubMedIdentifiersIgnored() throws {
+        let data = Data(#"""
+        {"status":"ok","references":[
+          {"pmid":"0038743124","title":"Padded"},
+          {"pmid":"38743124","title":"Duplicate of padded"},
+          {"pmid":"\u0663\u0668","title":"Arabic-Indic digits"},
+          {"pmid":"\uFF13\uFF18","title":"Fullwidth digits"},
+          {"pmid":true,"title":"Boolean"},
+          {"pmid":"000","title":"All zeros"},
+          {"id":"99","title":"Row id only"},
+          {"pmid":1234,"title":"Numeric"},
+          {"url":"https://pubmed.ncbi.nlm.nih.gov/0042/","title":"From URL"}
+        ]}
+        """#.utf8)
+        let result = try GLKBResponseParser.parse(data, options: .init(maxArticles: 10))
+        XCTAssertEqual(result.references.map(\.pmid), ["38743124", "1234", "42"])
+        XCTAssertEqual(result.references.map(\.title), ["Padded", "Numeric", "From URL"])
+        XCTAssertEqual(result.references.last?.url?.absoluteString, "https://pubmed.ncbi.nlm.nih.gov/42/")
+    }
+
+    func testCitationCountsOutsideThePlausibleRangeAreDropped() throws {
+        let data = Data(#"""
+        {"status":"ok","references":[
+          {"pmid":"1","title":"Huge","n_citation":1.5e20},
+          {"pmid":"2","title":"Negative","n_citation":-3},
+          {"pmid":"3","title":"Boolean","n_citation":true},
+          {"pmid":"4","title":"String","n_citation":"7"},
+          {"pmid":"5","title":"Whole double","n_citation":12.0},
+          {"pmid":"6","title":"Fraction","n_citation":12.5},
+          {"pmid":"7","title":"Above cap","n_citation":10000001},
+          {"pmid":"8","title":"Null then legacy","n_citation":null,"citation_count":5},
+          {"pmid":"9","title":"Thirty digits","n_citation":123456789012345678901234567890}
+        ]}
+        """#.utf8)
+        let result = try GLKBResponseParser.parse(data, options: .init(maxArticles: 10))
+        XCTAssertEqual(result.references.map(\.citationCount), [nil, nil, nil, 7, 12, nil, nil, 5, nil])
+    }
+
+    func testReferencesContainerShapesAreValidated() {
+        XCTAssertThrowsError(try GLKBResponseParser.parse(Data(#"{"status":"ok","references":{"pmid":"1"}}"#.utf8)))
+        XCTAssertThrowsError(try GLKBResponseParser.parse(Data(#"{"status":"ok","references":null}"#.utf8)))
+        XCTAssertThrowsError(try GLKBResponseParser.parse(
+            Data(#"{"status":"no_results","references":[{"pmid":"1","title":"Contradiction"}]}"#.utf8)
+        ))
+        // Boolean titles are not text.
+        XCTAssertThrowsError(try GLKBResponseParser.parse(Data(#"{"status":"ok","references":[{"pmid":"1","title":true}]}"#.utf8)))
+    }
+
     func testMalformedAndApplicationErrorResponsesThrow() {
         do {
             _ = try GLKBResponseParser.parse(Data("[]".utf8))

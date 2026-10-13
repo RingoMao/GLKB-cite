@@ -12,7 +12,10 @@ enum Theme {
     /// Primary brand blue.
     static let accent = Color(red: 0x33 / 255, green: 0x77 / 255, blue: 0xFB / 255)
 
-    /// Darker companion to `accent` for gradient bottoms and pressed states.
+    /// Darker companion to `accent` for gradient bottoms, pressed states, and
+    /// every fill that carries white text: white on `accent` (#3377FB) is
+    /// 4.06:1 at the small sizes used here, below WCAG AA; white on this
+    /// (#1F5CE0) is 5.7:1.
     static let accentDeep = Color(red: 0x1F / 255, green: 0x5C / 255, blue: 0xE0 / 255)
 
     /// Text/icon colour on `accentSoft` containers (mockup `--accent-dark`).
@@ -50,6 +53,11 @@ enum Theme {
     /// Opaque card surface placed on top of the translucent panel material.
     static let cardSurface = dynamic(light: NSColor(srgbRed: 0.992, green: 0.992, blue: 1.0, alpha: 1),
                                      dark: NSColor(srgbRed: 0.16, green: 0.16, blue: 0.18, alpha: 1))
+
+    /// Surface of the transient toast. Lighter than a card in dark mode so it
+    /// separates from the cards it floats over.
+    static let toastSurface = dynamic(light: NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 1),
+                                      dark: NSColor(srgbRed: 0.27, green: 0.27, blue: 0.30, alpha: 1))
 
     /// Opaque background of the floating results panel. A flat surface
     /// rather than a translucent material, so the panel reads the same
@@ -117,7 +125,8 @@ struct GLKBMark: Shape {
 
 // MARK: - Buttons
 
-/// Filled brand-blue button (mockup `.btn.primary`).
+/// Filled brand-blue button (mockup `.btn.primary`), on the deeper blue so
+/// its white label meets AA contrast.
 struct PrimaryButtonStyle: ButtonStyle {
     var compact = false
 
@@ -127,7 +136,7 @@ struct PrimaryButtonStyle: ButtonStyle {
             .padding(.horizontal, compact ? 12 : 18)
             .padding(.vertical, compact ? 6 : 8)
             .foregroundStyle(.white)
-            .background(Theme.accent.opacity(configuration.isPressed ? 0.8 : 1),
+            .background(Theme.accentDeep.opacity(configuration.isPressed ? 0.8 : 1),
                         in: RoundedRectangle(cornerRadius: 7))
     }
 }
@@ -155,10 +164,10 @@ struct OutlineButtonStyle: ButtonStyle {
             .font(.system(size: 11.5, weight: .medium))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .foregroundStyle(Theme.accent)
+            .foregroundStyle(Theme.accentDeep)
             .background(configuration.isPressed ? Theme.accentSoft : Color.clear,
                         in: RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.accent))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.accentDeep))
     }
 }
 
@@ -176,8 +185,27 @@ struct ToastView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(Theme.cardSurface, in: RoundedRectangle(cornerRadius: 10))
+        .background(Theme.toastSurface, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.hairline))
         .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+/// Accent-tinted switch whose accessible name is the row label it sits
+/// beside, so VoiceOver announces what the switch controls (the visible label
+/// is a separate Text and would otherwise leave the control unnamed).
+struct LabeledSwitch: View {
+    let label: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(label, isOn: $isOn)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .tint(Theme.accent)
+            .accessibilityLabel(label)
     }
 }
 

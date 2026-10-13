@@ -40,7 +40,11 @@ struct ResultPanelView: View {
             }
         }
         .frame(width: 380)
-        .frame(minHeight: 180, maxHeight: 560, alignment: .top)
+        .frame(
+            minHeight: AppCoordinator.minimumResultPanelHeight,
+            maxHeight: coordinator.resultPanelMaxHeight,
+            alignment: .top
+        )
         .fixedSize(horizontal: false, vertical: true)
         .background(Theme.panelSurface)
         .clipShape(RoundedRectangle(cornerRadius: Theme.windowCornerRadius))
@@ -143,8 +147,8 @@ struct ResultPanelView: View {
                     .buttonStyle(PrimaryButtonStyle(compact: true))
                 }
                 Text("Generated from GLKB/PubMed evidence. Verify each source before citing.")
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
             }
             .padding(EdgeInsets(top: 10, leading: 14, bottom: 12, trailing: 14))
         }
@@ -304,9 +308,14 @@ private struct ReferenceCard: View {
     let open: () -> Void
     let cite: () -> Void
 
+    @EnvironmentObject private var coordinator: AppCoordinator
     @State private var isHovered = false
     @State private var citeHovered = false
     @State private var quoteExpanded = false
+    /// Full Keyboard Access lands on the Cite button; it must be visible then.
+    @FocusState private var citeFocused: Bool
+
+    private var citeRevealed: Bool { isHovered || citeFocused }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -365,6 +374,8 @@ private struct ReferenceCard: View {
                 }
                 .buttonStyle(.plain)
                 .help("Open PMID \(reference.pmid) in PubMed")
+                .accessibilityLabel(footMeta)
+                .accessibilityHint("Opens the article on PubMed")
 
                 Spacer()
 
@@ -377,16 +388,19 @@ private struct ReferenceCard: View {
                     .foregroundStyle(citeHovered ? Color.white : Theme.accentDark)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 3)
-                    .background(citeHovered ? Theme.accent : Theme.citeSurface, in: Capsule())
+                    .background(citeHovered ? Theme.accentDeep : Theme.citeSurface, in: Capsule())
                     .contentShape(Capsule())
                     .onHover { hovering in
                         withAnimation(.easeOut(duration: 0.12)) { citeHovered = hovering }
                     }
                 }
                 .buttonStyle(.plain)
+                .focused($citeFocused)
                 .help("Copy a formatted citation")
-                .opacity(isHovered ? 1 : 0)
-                .offset(x: isHovered ? 0 : 3)
+                .accessibilityLabel("Cite")
+                .accessibilityHint("Shows citation formats to copy")
+                .opacity(citeRevealed ? 1 : 0)
+                .offset(x: citeRevealed ? 0 : 3)
             }
         }
         .padding(EdgeInsets(top: 11, leading: 12, bottom: 10, trailing: 12))
@@ -397,6 +411,13 @@ private struct ReferenceCard: View {
         )
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
+        }
+        // Hiding the panel delivers no hover-exit event, so the pointer that
+        // was over this card would leave it highlighted until the next show.
+        .onReceive(coordinator.$isResultPanelVisible) { visible in
+            guard !visible else { return }
+            isHovered = false
+            citeHovered = false
         }
     }
 

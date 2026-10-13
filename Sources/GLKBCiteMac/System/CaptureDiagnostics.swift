@@ -7,8 +7,9 @@ import os
 /// "I selected text and nothing happened" impossible to explain. Enabling
 /// diagnostics records *why* a capture succeeded or failed.
 ///
-/// Selected text is never logged — only element roles, strategies, character
-/// counts, and error codes. Disabled unless the user opts in with:
+/// Selected text is never logged. What is logged: element roles, search
+/// strategies, character counts, error codes, and the bundle identifier of
+/// the app the selection was made in. Disabled unless the user opts in with:
 ///
 ///     defaults write org.glkb.cite diagnostics.captureLoggingEnabled -bool true
 public enum CaptureDiagnostics {
@@ -20,8 +21,11 @@ public enum CaptureDiagnostics {
         UserDefaults.standard.bool(forKey: "diagnostics.captureLoggingEnabled")
     }()
 
-    public static func log(_ message: String) {
+    /// The message is an autoclosure so call sites pay nothing (no string
+    /// building, no attribute reads) while diagnostics are off.
+    public static func log(_ message: @autoclosure () -> String) {
         guard isEnabled else { return }
-        logger.notice("\(message, privacy: .public)")
+        let text = message()
+        logger.notice("\(text, privacy: .public)")
     }
 }

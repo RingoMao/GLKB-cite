@@ -47,9 +47,9 @@ public enum LiteratureReportFormatter {
             let url = PubMed.url(for: reference.pmid)
             let pmidHTML: String
             if let url {
-                pmidHTML = "<a href=\"\(escapeHTML(url.absoluteString))\">PMID \(escapeHTML(reference.pmid))</a>"
+                pmidHTML = "<a href=\"\(escapeHTML(url.absoluteString))\">PMID: \(escapeHTML(reference.pmid))</a>"
             } else {
-                pmidHTML = "PMID \(escapeHTML(reference.pmid))"
+                pmidHTML = "PMID: \(escapeHTML(reference.pmid))"
             }
             let evidenceHTML: String
             if includeEvidence,

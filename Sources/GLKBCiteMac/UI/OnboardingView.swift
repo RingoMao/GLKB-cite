@@ -2,6 +2,7 @@ import SwiftUI
 
 struct OnboardingView: View {
     @EnvironmentObject private var coordinator: AppCoordinator
+    @EnvironmentObject private var settings: AppSettings
 
     @State private var step = 0
     @State private var apiKey = ""
@@ -66,7 +67,7 @@ struct OnboardingView: View {
     private var accessibilityStep: some View {
         StepLayout(
             title: "Allow selected-text access",
-            description: "Accessibility lets GLKB Cite read only the selection you invoke and position its result panel. Secure fields are always rejected."
+            description: "Accessibility lets GLKB Cite read the text you select and position its result panel. Nothing is sent anywhere until you ask for citations. Secure fields are always rejected."
         ) {
             InfoCard {
                 InfoRow(bold: "Step 2 of 4", rest: "— Accessibility required")
@@ -124,14 +125,23 @@ struct OnboardingView: View {
 
     private var privacyStep: some View {
         StepLayout(
-            title: "Compatibility Capture and privacy",
-            description: "If Accessibility cannot read a selection, GLKB Cite may briefly send Copy, read the text, and restore the clipboard. You can disable this in Privacy Settings."
+            title: "Your choices",
+            description: "Both options are recommended and both can be changed later in Settings › Privacy. Nothing is sent to GLKB until you click the badge or ask for citations."
         ) {
-            InfoCard {
-                InfoRow(bold: "Sends text only when you ask", rest: "— badge appearance alone never contacts GLKB.")
-                InfoRow(bold: "No analytics", rest: "and no persistent query history.")
-                InfoRow(bold: "Clipboard note", rest: "— clipboard-history utilities may observe the temporary Copy value.")
+            VStack(spacing: 10) {
+                ConsentRow(
+                    title: "Show the selection badge",
+                    detail: "After setup, GLKB Cite watches for selection gestures in all apps and reads the selected text locally so it can offer a badge.",
+                    isOn: $settings.automaticSelectionEnabled
+                )
+                ConsentRow(
+                    title: "Allow temporary Copy fallback",
+                    detail: "In apps that expose no selected text (some PDF viewers), clicking the badge or pressing ⌥⌘G may briefly send Copy, read the text, and restore your clipboard. Clipboard-history utilities may observe that temporary value.",
+                    isOn: $settings.compatibilityCaptureEnabled
+                )
             }
+            .frame(maxWidth: 380)
+            .onAppear { coordinator.prepareOnboardingPrivacyStep() }
             if let message {
                 Text(message)
                     .font(.system(size: 11))
@@ -235,6 +245,35 @@ private struct StepLayout<Content: View>: View {
 
             content
         }
+    }
+}
+
+private struct ConsentRow: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12.5, weight: .medium))
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            LabeledSwitch(label: title, isOn: $isOn)
+        }
+        .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.insetSurface, in: RoundedRectangle(cornerRadius: Theme.cardCornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardCornerRadius)
+                .strokeBorder(Theme.hairline)
+        )
     }
 }
 

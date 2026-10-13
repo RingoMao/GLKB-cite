@@ -56,3 +56,11 @@ swift test --scratch-path ~/Library/Caches/org.glkb.cite/build
 `Scripts/build-app.sh` already does this (override the location with
 `SWIFTPM_SCRATCH_ROOT`), and it assembles and signs the app bundle in a private
 temporary directory for the same reason.
+
+## Versions
+
+The shipped version and build number live in the `VERSION` file at the
+repository root; the values in `Info.plist` are placeholders the build
+replaces. Raise `BUILD_NUMBER` for every build handed to anyone and tag
+shipped builds as `v<version>-build<number>` (`release-tester.sh` prints the
+command).

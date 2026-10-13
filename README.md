@@ -20,11 +20,16 @@ depend on PopClip.
   contacts the backend.
 - Sends a request only after the user clicks the badge, presses `⌥⌘G`, invokes
   the menu command, or uses the macOS Service.
-- Falls back, when explicitly enabled, to a guarded temporary Copy transaction
+- Falls back, only when you have turned on **Allow temporary Copy fallback** (asked in the setup wizard, changeable in Settings → Privacy), to a guarded temporary Copy transaction
   for apps that do not expose selections through Accessibility.
 - Calls the GLKB citation endpoint and presents deduplicated PubMed references,
   relevance reasons, and evidence excerpts.
 - Copies a rich or plain-text report and opens results in PubMed.
+- Formats any reference as MLA 9, APA 7, Chicago, Harvard or Vancouver (NLM),
+  BibTeX or RIS. When the Cite modal opens, the volume, issue, pages, DOI,
+  journal abbreviation and structured author names are fetched by PMID from
+  PubMed's official E-utilities API; the citations fall back to GLKB's fields
+  if PubMed cannot be reached.
 - Coalesces identical in-flight requests and caches completed results in memory.
 - Stores the user-provided `glkb_` credential only in macOS Keychain.
 

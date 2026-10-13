@@ -7,6 +7,23 @@ public struct SelectionSource: Hashable, Sendable {
     public let processIdentifier: pid_t
     public let applicationName: String?
     public let bundleIdentifier: String?
+
+    public init(processIdentifier: pid_t, applicationName: String?, bundleIdentifier: String?) {
+        self.processIdentifier = processIdentifier
+        self.applicationName = applicationName
+        self.bundleIdentifier = bundleIdentifier
+    }
+
+    /// The application the user is working in right now.
+    @MainActor
+    public static func frontmost() -> SelectionSource? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        return SelectionSource(
+            processIdentifier: app.processIdentifier,
+            applicationName: app.localizedName,
+            bundleIdentifier: app.bundleIdentifier
+        )
+    }
 }
 
 public struct SystemSelection: Hashable, Sendable {
@@ -25,6 +42,7 @@ public enum SelectionCaptureError: Error, LocalizedError {
     case secureField
     case selectionUnavailable(source: SelectionSource)
     case emptySelection
+    case selectionTooLong(characters: Int)
     case staleSelection
     case accessibilityFailure(operation: String, code: AXError)
 
@@ -40,55 +58,113 @@ public enum SelectionCaptureError: Error, LocalizedError {
             "The focused application did not expose selected text. Enable Compatibility Capture or use the GLKB Cite Service."
         case .emptySelection:
             "Select one scientific sentence before using GLKB Cite."
+        case let .selectionTooLong(characters):
+            "The selection is about \(characters) characters. The GLKB citation endpoint accepts at most \(LiteratureInputValidator.maximumCharacters) characters."
         case .staleSelection:
             "The original selection changed. Select it again before finding citations."
         case let .accessibilityFailure(operation, code):
             "macOS Accessibility could not \(operation) (error \(code.rawValue))."
         }
     }
+
+    /// Short, content-free identifier for diagnostics.
+    public var diagnosticCode: String {
+        switch self {
+        case .accessibilityPermissionRequired: "permission-required"
+        case .focusedElementUnavailable: "focused-element-unavailable"
+        case .secureField: "secure-field"
+        case .selectionUnavailable: "selection-unavailable"
+        case .emptySelection: "empty-selection"
+        case .selectionTooLong: "selection-too-long"
+        case .staleSelection: "stale-selection"
+        case let .accessibilityFailure(_, code): "ax-failure-\(code.rawValue)"
+        }
+    }
+}
+
+/// How far below the focused element a capture may look for a selection the
+/// focused element does not expose itself.
+public enum DescendantSearch: Sendable, Hashable {
+    /// Only the focused element and its ancestors. Used by the passive badge
+    /// path, where the walk runs after every selection gesture.
+    case none
+    /// A shallow search beneath the focused element (cheap).
+    case shallow
+    /// A deeper search beneath the focused element and its nearest content
+    /// container. Used for explicit invocations (hot key, badge click).
+    case thorough
+}
+
+public struct SelectionCaptureOptions: Sendable, Hashable {
+    /// Whether the clipboard "Copy" fallback may run when Accessibility
+    /// exposes no selected text. Only ever true for explicit user actions.
+    public var allowCompatibility: Bool
+    /// When set, the capture (including the Copy fallback) must come from
+    /// this process, so a badge offered for one app can never read another.
+    public var expectedProcess: pid_t?
+    public var descendantSearch: DescendantSearch
+
+    public init(
+        allowCompatibility: Bool,
+        expectedProcess: pid_t? = nil,
+        descendantSearch: DescendantSearch = .thorough
+    ) {
+        self.allowCompatibility = allowCompatibility
+        self.expectedProcess = expectedProcess
+        self.descendantSearch = descendantSearch
+    }
 }
 
 @MainActor
 public protocol AccessibilitySelectionCapturing: AnyObject {
+    /// Conformers must implement at least one of the two capture methods;
+    /// each has a default that forwards to the other.
     func captureSelection() throws -> SystemSelection
+    func captureSelection(descendantSearch: DescendantSearch) throws -> SystemSelection
     /// Whether the focused element is a table/outline/list whose "selection"
     /// is items rather than text. Used to avoid offering a badge after a drag
     /// that selected files or rows.
     func focusedElementIsItemContainer() -> Bool
     /// Whether a drag from `start` to `end` (AppKit screen coordinates) began
-    /// and ended inside the same content element (document, page, image, web
+    /// and ended inside the same content area (document, page, image, web
     /// area…) rather than on window chrome, a control, or two different views.
     func gestureLandsInContent(from start: CGPoint, to end: CGPoint) -> Bool
 }
 
 public extension AccessibilitySelectionCapturing {
+    func captureSelection() throws -> SystemSelection {
+        try captureSelection(descendantSearch: .thorough)
+    }
+    func captureSelection(descendantSearch: DescendantSearch) throws -> SystemSelection {
+        try captureSelection()
+    }
     func focusedElementIsItemContainer() -> Bool { false }
     func gestureLandsInContent(from start: CGPoint, to end: CGPoint) -> Bool { true }
 }
 
 @MainActor
 public protocol AsyncSystemSelectionCapturing: AnyObject {
-    func captureSelection(allowCompatibility: Bool) async throws -> SystemSelection
-    /// Like `captureSelection(allowCompatibility:)`, but refuses to run the
-    /// compatibility (Copy) fallback unless the selection's source process is
-    /// `expectedProcess`, so a badge offered for one app can never copy from
-    /// another app that became frontmost in the meantime.
-    func captureSelection(allowCompatibility: Bool, expectedProcess: pid_t?) async throws -> SystemSelection
+    func captureSelection(_ options: SelectionCaptureOptions) async throws -> SystemSelection
     func isStillValid(_ selection: SystemSelection) async -> Bool
     func focusedElementIsItemContainer() -> Bool
     func gestureLandsInContent(from start: CGPoint, to end: CGPoint) -> Bool
+    /// Put the user's clipboard back if a Copy fallback was interrupted (for
+    /// example by the app quitting) before it could restore it.
+    func restorePendingClipboardIfNeeded()
 }
 
 public extension AsyncSystemSelectionCapturing {
+    func captureSelection(allowCompatibility: Bool) async throws -> SystemSelection {
+        try await captureSelection(SelectionCaptureOptions(allowCompatibility: allowCompatibility))
+    }
     func captureSelection(allowCompatibility: Bool, expectedProcess: pid_t?) async throws -> SystemSelection {
-        let selection = try await captureSelection(allowCompatibility: allowCompatibility)
-        if let expectedProcess, selection.sourceProcessIdentifier != expectedProcess {
-            throw SelectionCaptureError.staleSelection
-        }
-        return selection
+        try await captureSelection(
+            SelectionCaptureOptions(allowCompatibility: allowCompatibility, expectedProcess: expectedProcess)
+        )
     }
     func focusedElementIsItemContainer() -> Bool { false }
     func gestureLandsInContent(from start: CGPoint, to end: CGPoint) -> Bool { true }
+    func restorePendingClipboardIfNeeded() {}
 }
 
 @MainActor
@@ -103,36 +179,42 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
         self.permissionManager = permissionManager
     }
 
-    public func captureSelection() throws -> SystemSelection {
+    public func captureSelection(descendantSearch: DescendantSearch) throws -> SystemSelection {
         guard permissionManager.isTrusted else {
             throw SelectionCaptureError.accessibilityPermissionRequired
         }
 
         // Bound every accessibility round trip for this capture. Setting the
         // timeout on the system-wide element applies it process-wide, so the
-        // focused-element read, the secure-field walk, and the ancestor walk
-        // are all protected against an unresponsive frontmost app.
+        // focused-element read, the secure-field walk, and the tree walk are
+        // all protected against an unresponsive frontmost app. The whole
+        // capture is additionally bounded by `walkBudget`.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), Self.messagingTimeout)
+        let deadline = ContinuousClock.now + Self.walkBudget
 
         let element = try focusedElement()
         guard !isSecure(element) else { throw SelectionCaptureError.secureField }
         let source = try source(for: element)
 
-        guard let resolved = resolveSelection(startingAt: element) else {
+        guard let resolved = try resolveSelection(
+            startingAt: element, descendantSearch: descendantSearch, deadline: deadline
+        ) else {
             CaptureDiagnostics.log(
                 "ax: no selected text — app=\(source.bundleIdentifier ?? "?") "
-                    + "focusedRole=\(role(of: element))"
+                    + "focusedRole=\(self.role(of: element)) search=\(descendantSearch)"
             )
             throw SelectionCaptureError.selectionUnavailable(source: source)
         }
         // The text may have come from an ancestor or descendant of the focused
         // element; enforce the secure-field policy on that element as well.
-        guard !isSecure(resolved.element) else { throw SelectionCaptureError.secureField }
+        if !CFEqual(resolved.element, element), isSecure(resolved.element) {
+            throw SelectionCaptureError.secureField
+        }
         let capturedText = resolved.text
         CaptureDiagnostics.log(
             "ax: found selection — app=\(source.bundleIdentifier ?? "?") "
-                + "focusedRole=\(role(of: element)) "
-                + "holderRole=\(role(of: resolved.element)) "
+                + "focusedRole=\(self.role(of: element)) "
+                + "holderRole=\(self.role(of: resolved.element)) "
                 + "via=\(resolved.strategy) chars=\(capturedText.count)"
         )
 
@@ -176,10 +258,15 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
     public func gestureLandsInContent(from start: CGPoint, to end: CGPoint) -> Bool {
         guard permissionManager.isTrusted,
               let startElement = element(atAppKitPoint: start),
-              let endElement = element(atAppKitPoint: end),
-              CFEqual(startElement, endElement)
+              let endElement = element(atAppKitPoint: end)
         else { return false }
-        return Self.contentRoles.contains(role(of: startElement))
+        // Compare the content areas the two points fall in, not the deepest
+        // elements: a drag across two paragraphs or links of one page is
+        // still one selection gesture.
+        let startArea = contentContainer(of: startElement) ?? startElement
+        let endArea = contentContainer(of: endElement) ?? endElement
+        guard CFEqual(startArea, endArea) else { return false }
+        return Self.contentRoles.contains(role(of: startArea))
     }
 
     /// Roles that plausibly display selectable document content. Window
@@ -189,6 +276,21 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
         kAXTextFieldRole, kAXStaticTextRole, kAXLayoutAreaRole, kAXLayoutItemRole,
         kAXUnknownRole, "AXPage", "AXDocument", "AXCanvas",
     ]
+
+    /// Roles that bound one scrollable document/page/web area.
+    private static let contentContainerRoles: Set<String> = [
+        kAXScrollAreaRole, "AXWebArea", "AXPage", "AXDocument", kAXLayoutAreaRole, kAXTextAreaRole,
+    ]
+
+    private func contentContainer(of element: AXUIElement) -> AXUIElement? {
+        var current: AXUIElement? = element
+        for _ in 0..<Self.ancestorLimit {
+            guard let candidate = current else { return nil }
+            if Self.contentContainerRoles.contains(role(of: candidate)) { return candidate }
+            current = parent(of: candidate)
+        }
+        return nil
+    }
 
     private func element(atAppKitPoint point: CGPoint) -> AXUIElement? {
         // Accessibility hit-testing uses top-left-origin coordinates relative
@@ -211,16 +313,31 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
         switch error {
         case .success:
             guard let rawElement, CFGetTypeID(rawElement) == AXUIElementGetTypeID() else {
-                throw SelectionCaptureError.focusedElementUnavailable
+                throw unavailable()
             }
             return unsafeDowncast(rawElement as AnyObject, to: AXUIElement.self)
-        case .noValue, .attributeUnsupported:
-            throw SelectionCaptureError.focusedElementUnavailable
+        case .apiDisabled:
+            throw SelectionCaptureError.accessibilityPermissionRequired
+        case .noValue, .attributeUnsupported, .notImplemented, .cannotComplete, .failure:
+            // Apps with no Accessibility implementation (Java, Wine, some Qt
+            // apps), and apps too busy to answer within the messaging
+            // timeout, must reach the Copy fallback — that is what it exists
+            // for — rather than a "permission required" screen.
+            throw unavailable()
         default:
             throw SelectionCaptureError.accessibilityFailure(
                 operation: "read the focused element", code: error
             )
         }
+    }
+
+    /// `selectionUnavailable` for the app in front, or the plain
+    /// focused-element error when no app can be identified.
+    private func unavailable() -> SelectionCaptureError {
+        if let source = SelectionSource.frontmost() {
+            return .selectionUnavailable(source: source)
+        }
+        return .focusedElementUnavailable
     }
 
     private func source(for element: AXUIElement) throws -> SelectionSource {
@@ -240,15 +357,24 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
     }
 
     /// Reads `AXSelectedText` from one element, treating an unsupported
-    /// attribute and an empty value alike as "nothing here".
-    private func selectedTextValue(of element: AXUIElement) -> String? {
+    /// attribute and an empty value alike as "nothing here". Refuses to
+    /// transfer a selection far beyond the submission limit: the length is
+    /// checked through the selected range first, so a Select All in a huge
+    /// document never crosses the Accessibility connection.
+    private func selectedTextValue(of element: AXUIElement) throws -> String? {
+        if let range = selectedTextRange(from: element), range.length > Self.maximumSelectionCharacters {
+            throw SelectionCaptureError.selectionTooLong(characters: range.length)
+        }
         var rawText: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             element, kAXSelectedTextAttribute as CFString, &rawText
         ) == .success,
-            let text = rawText as? String,
-            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let text = rawText as? String
         else { return nil }
+        guard text.utf16.count <= Self.maximumSelectionCharacters else {
+            throw SelectionCaptureError.selectionTooLong(characters: text.utf16.count)
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return text
     }
 
@@ -258,8 +384,10 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
     /// expose `AXSelectedText` itself — browsers focus a web area or scroll
     /// area whose selection lives on a descendant, and some apps keep it on
     /// an ancestor. So the focused element is only the starting point: this
-    /// walks up the ancestor chain and then breadth-first down the focused
-    /// window, both bounded so a large document cannot stall the capture.
+    /// walks up the ancestor chain and then, if asked, down from the focused
+    /// element and its nearest content container. The search is deliberately
+    /// never rooted at the whole window: a split view's other pane may hold an
+    /// older, inactive selection that the user did not just make.
     private struct ResolvedSelection {
         let element: AXUIElement
         let text: String
@@ -269,29 +397,58 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
         let textMarkerRange: CFTypeRef?
     }
 
-    private func resolveSelection(startingAt focused: AXUIElement) -> ResolvedSelection? {
-        if let hit = selection(of: focused, strategy: "focused") { return hit }
+    private func resolveSelection(
+        startingAt focused: AXUIElement,
+        descendantSearch: DescendantSearch,
+        deadline: ContinuousClock.Instant
+    ) throws -> ResolvedSelection? {
+        if let hit = try selection(of: focused, strategy: "focused") { return hit }
 
+        var checked: [AXUIElement] = [focused]
+        var container: AXUIElement?
         var ancestor = parent(of: focused)
         for depth in 1...Self.ancestorLimit {
-            guard let element = ancestor else { break }
-            if let hit = selection(of: element, strategy: "ancestor-\(depth)") { return hit }
+            guard let element = ancestor, ContinuousClock.now < deadline else { break }
+            if let hit = try selection(of: element, strategy: "ancestor-\(depth)") { return hit }
+            checked.append(element)
+            if container == nil, Self.contentContainerRoles.contains(role(of: element)) {
+                container = element
+            }
             ancestor = parent(of: element)
         }
 
-        let root = topLevelElement(of: focused) ?? focused
-        return searchDescendants(of: root)
+        let limits: (depth: Int, nodes: Int)
+        switch descendantSearch {
+        case .none:
+            return nil
+        case .shallow:
+            limits = (Self.shallowDepthLimit, Self.shallowNodeLimit)
+        case .thorough:
+            limits = (Self.depthLimit, Self.nodeLimit)
+        }
+
+        if let hit = try searchDescendants(
+            of: focused, skipping: checked, depthLimit: limits.depth, nodeLimit: limits.nodes, deadline: deadline
+        ) {
+            return hit
+        }
+        if descendantSearch == .thorough, let container {
+            return try searchDescendants(
+                of: container, skipping: checked, depthLimit: limits.depth, nodeLimit: limits.nodes, deadline: deadline
+            )
+        }
+        return nil
     }
 
     /// Checks one element for a selection, using whichever API its role
     /// supports: plain `AXSelectedText` for native text, or WebKit's
     /// text-marker range for a web area (Safari and WebKit views never expose
     /// page selections through `AXSelectedText`).
-    private func selection(of element: AXUIElement, strategy: String) -> ResolvedSelection? {
-        if let text = selectedTextValue(of: element) {
+    private func selection(of element: AXUIElement, strategy: String) throws -> ResolvedSelection? {
+        if let text = try selectedTextValue(of: element) {
             return ResolvedSelection(element: element, text: text, strategy: strategy, textMarkerRange: nil)
         }
-        if role(of: element) == Self.webAreaRole, let web = webAreaSelection(of: element) {
+        if role(of: element) == Self.webAreaRole, let web = try webAreaSelection(of: element) {
             return ResolvedSelection(
                 element: element, text: web.text, strategy: "\(strategy)/webarea",
                 textMarkerRange: web.markerRange
@@ -300,19 +457,30 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
         return nil
     }
 
-    private func webAreaSelection(of element: AXUIElement) -> (text: String, markerRange: CFTypeRef)? {
+    private func webAreaSelection(of element: AXUIElement) throws -> (text: String, markerRange: CFTypeRef)? {
         var rawRange: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             element, Self.selectedTextMarkerRangeAttribute as CFString, &rawRange
         ) == .success, let rawRange else { return nil }
 
+        var rawLength: CFTypeRef?
+        if AXUIElementCopyParameterizedAttributeValue(
+            element, Self.lengthForTextMarkerRangeAttribute as CFString, rawRange, &rawLength
+        ) == .success, let length = (rawLength as? NSNumber)?.intValue,
+           length > Self.maximumSelectionCharacters {
+            throw SelectionCaptureError.selectionTooLong(characters: length)
+        }
+
         var rawString: CFTypeRef?
         guard AXUIElementCopyParameterizedAttributeValue(
             element, Self.stringForTextMarkerRangeAttribute as CFString, rawRange, &rawString
         ) == .success,
-            let text = rawString as? String,
-            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let text = rawString as? String
         else { return nil }
+        guard text.utf16.count <= Self.maximumSelectionCharacters else {
+            throw SelectionCaptureError.selectionTooLong(characters: text.utf16.count)
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return (text, rawRange)
     }
 
@@ -328,19 +496,27 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
         return AXValueGetValue(value, .cgRect, &rect) ? rect : nil
     }
 
-    private func searchDescendants(of root: AXUIElement) -> ResolvedSelection? {
+    private func searchDescendants(
+        of root: AXUIElement,
+        skipping checked: [AXUIElement],
+        depthLimit: Int,
+        nodeLimit: Int,
+        deadline: ContinuousClock.Instant
+    ) throws -> ResolvedSelection? {
         var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
         var visited = 0
 
         while !queue.isEmpty {
+            guard ContinuousClock.now < deadline else { return nil }
             let (element, depth) = queue.removeFirst()
             visited += 1
-            if visited > Self.nodeLimit { break }
+            if visited > nodeLimit { break }
 
-            if depth > 0, let hit = selection(of: element, strategy: "descendant-\(depth)") {
+            let alreadyChecked = checked.contains { CFEqual($0, element) }
+            if !alreadyChecked, let hit = try selection(of: element, strategy: "descendant-\(depth)") {
                 return hit
             }
-            guard depth < Self.depthLimit else { continue }
+            guard depth < depthLimit else { continue }
             for child in children(of: element) {
                 queue.append((child, depth + 1))
             }
@@ -351,6 +527,7 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
     private static let webAreaRole = "AXWebArea"
     private static let selectedTextMarkerRangeAttribute = "AXSelectedTextMarkerRange"
     private static let stringForTextMarkerRangeAttribute = "AXStringForTextMarkerRange"
+    private static let lengthForTextMarkerRangeAttribute = "AXLengthForTextMarkerRange"
     private static let boundsForTextMarkerRangeAttribute = "AXBoundsForTextMarkerRange"
 
     private func parent(of element: AXUIElement) -> AXUIElement? {
@@ -361,19 +538,6 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
             let raw, CFGetTypeID(raw) == AXUIElementGetTypeID()
         else { return nil }
         return unsafeDowncast(raw as AnyObject, to: AXUIElement.self)
-    }
-
-    private func topLevelElement(of element: AXUIElement) -> AXUIElement? {
-        for attribute in [kAXWindowAttribute, kAXTopLevelUIElementAttribute] {
-            var raw: CFTypeRef?
-            if AXUIElementCopyAttributeValue(
-                element, attribute as CFString, &raw
-            ) == .success,
-                let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() {
-                return unsafeDowncast(raw as AnyObject, to: AXUIElement.self)
-            }
-        }
-        return nil
     }
 
     private func children(of element: AXUIElement) -> [AXUIElement] {
@@ -395,17 +559,23 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
 
     /// Bounds for the accessibility tree walk. Every attribute read is a
     /// cross-process round trip, so the walk is capped in breadth and depth,
-    /// and every message in a capture is bounded by `messagingTimeout` (set
-    /// process-wide at the top of `captureSelection`) to keep a large document
-    /// or an unresponsive app from stalling the main actor.
+    /// every message is bounded by `messagingTimeout` (set process-wide at
+    /// the top of a capture), and the whole capture by `walkBudget`, so a
+    /// large document or a slow app cannot stall the main actor for long.
     // Page content in browsers nests the focused element many groups deep
     // below the web area, so the (cheap, linear) ancestor walk goes further
     // than the (expensive, branching) descendant search.
     private static let ancestorLimit = 14
     private static let depthLimit = 6
     private static let nodeLimit = 300
+    private static let shallowDepthLimit = 3
+    private static let shallowNodeLimit = 60
     private static let childLimit = 64
-    private static let messagingTimeout: Float = 0.25
+    private static let messagingTimeout: Float = 0.5
+    private static let walkBudget: Duration = .milliseconds(1_500)
+    /// Selections larger than this are refused before any text is copied
+    /// across the Accessibility connection.
+    private static let maximumSelectionCharacters = LiteratureInputValidator.maximumCharacters * 4
 
     private func selectedTextRange(from element: AXUIElement) -> CFRange? {
         var rawRange: CFTypeRef?
@@ -437,6 +607,10 @@ public final class AccessibilitySelectionProvider: AccessibilitySelectionCapturi
         return AXValueGetValue(value, .cgRect, &bounds) ? bounds : nil
     }
 
+    /// Secure text fields are recognised by subrole on the element and its
+    /// ancestors. Descendants are not checked: AppKit secure fields never
+    /// return their plaintext through `AXSelectedText`, and WebKit returns
+    /// the bulleted, text-security-transformed string for password inputs.
     private func isSecure(_ startingElement: AXUIElement) -> Bool {
         var current: AXUIElement? = startingElement
         for _ in 0..<8 {

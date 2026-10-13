@@ -67,12 +67,14 @@ struct SettingsView: View {
                     .padding(.vertical, 7)
                     .foregroundStyle(pane == item ? Color.white : Color.secondary)
                     .background(
-                        pane == item ? Theme.accent : Color.clear,
+                        pane == item ? Theme.accentDeep : Color.clear,
                         in: RoundedRectangle(cornerRadius: 7)
                     )
                     .contentShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("\(item.rawValue) settings")
+                .accessibilityAddTraits(pane == item ? .isSelected : [])
             }
             Spacer()
         }
@@ -93,7 +95,7 @@ private struct SettingsGroup<Content: View>: View {
             Text(label.uppercased())
                 .font(.system(size: 10, weight: .semibold))
                 .kerning(0.4)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .padding(.bottom, 8)
             content
         }
@@ -133,26 +135,16 @@ private struct SettingsRow<Control: View>: View {
     }
 }
 
-private struct AccentToggle: View {
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle("", isOn: $isOn)
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .tint(Theme.accent)
-    }
-}
-
 private struct SelectPill<SelectionValue: Hashable, Options: View>: View {
+    let label: String
     @Binding var selection: SelectionValue
     @ViewBuilder let options: Options
 
     var body: some View {
-        Picker("", selection: $selection) { options }
+        Picker(label, selection: $selection) { options }
             .labelsHidden()
             .fixedSize()
+            .accessibilityLabel(label)
     }
 }
 
@@ -164,12 +156,21 @@ private struct GeneralSettingsPane: View {
     @State private var launchMessage: String?
 
     var body: some View {
+        if let warning = coordinator.accessibilityWarning {
+            SettingsGroup(label: "Attention") {
+                SettingsRow(label: "Accessibility access was lost", description: warning, showDivider: false) {
+                    Button("Open System Settings") { coordinator.openAccessibilitySettings() }
+                        .buttonStyle(PrimaryButtonStyle(compact: true))
+                }
+            }
+        }
+
         SettingsGroup(label: "Selection") {
             SettingsRow(
                 label: "Show automatic selection badge (Beta)",
-                description: "Automatic mode observes selection gestures locally and never starts a GLKB request until you click the badge."
+                description: "Watches for selection gestures in all apps and reads the selected text locally to offer a badge. Nothing is sent to GLKB until you click it."
             ) {
-                AccentToggle(isOn: Binding(
+                LabeledSwitch(label: "Show automatic selection badge", isOn: Binding(
                     get: { settings.automaticSelectionEnabled },
                     set: { coordinator.setAutomaticSelectionEnabled($0) }
                 ))
@@ -182,11 +183,12 @@ private struct GeneralSettingsPane: View {
                     .padding(.vertical, 5)
                     .background(Theme.insetSurface, in: RoundedRectangle(cornerRadius: 7))
                     .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.hairline))
+                    .accessibilityLabel("Hot key: Option Command G")
             }
 
             SettingsRow(label: "Launch at login", description: launchMessage, showDivider: false) {
                 VStack(alignment: .trailing, spacing: 6) {
-                    AccentToggle(isOn: Binding(
+                    LabeledSwitch(label: "Launch at login", isOn: Binding(
                         get: { coordinator.launchAtLoginStatus == .enabled },
                         set: { enabled in
                             do {
@@ -244,16 +246,30 @@ private struct LiteratureSettingsPane: View {
                         .frame(width: 220)
                         .background(Theme.insetSurface, in: RoundedRectangle(cornerRadius: 7))
                         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.hairline))
+                        .accessibilityLabel("GLKB API key")
 
                     Button("Save") { saveKey() }
                         .buttonStyle(PrimaryButtonStyle(compact: true))
                         .disabled(keyEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    if coordinator.hasStoredAPIKey || coordinator.credentialStatus != .missing {
+                        Button("Remove") { removeKey() }
+                            .buttonStyle(SecondaryButtonStyle(compact: true))
+                            .help("Delete the stored key from the Keychain")
+                    }
                 }
                 .padding(.top, 5)
+                if case let .unreadable(reason) = coordinator.credentialStatus {
+                    Text("A key is saved but could not be read: \(reason) Save it again to replace it, or remove it.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let keyMessage {
                     Text(keyMessage)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
             }
             .padding(.vertical, 10)
@@ -261,7 +277,7 @@ private struct LiteratureSettingsPane: View {
 
         SettingsGroup(label: "Results") {
             SettingsRow(label: "Include evidence excerpts") {
-                AccentToggle(isOn: $settings.includeEvidence)
+                LabeledSwitch(label: "Include evidence excerpts", isOn: $settings.includeEvidence)
             }
 
             SettingsRow(
@@ -269,7 +285,7 @@ private struct LiteratureSettingsPane: View {
                 description: "The cache exists only in memory and is cleared when GLKB Cite exits.",
                 showDivider: false
             ) {
-                SelectPill(selection: $settings.cacheDurationMinutes) {
+                SelectPill(label: "Cache duration", selection: $settings.cacheDurationMinutes) {
                     Text("Off").tag(0)
                     Text("5 min").tag(5)
                     Text("15 min").tag(15)
@@ -289,6 +305,16 @@ private struct LiteratureSettingsPane: View {
             keyMessage = error.localizedDescription
         }
     }
+
+    private func removeKey() {
+        do {
+            try coordinator.deleteAPIKey()
+            keyEntry = ""
+            keyMessage = "API key removed."
+        } catch {
+            keyMessage = error.localizedDescription
+        }
+    }
 }
 
 // MARK: - Privacy
@@ -301,10 +327,10 @@ private struct PrivacySettingsPane: View {
         SettingsGroup(label: "Compatibility capture") {
             SettingsRow(
                 label: "Allow temporary Copy fallback",
-                description: "If Accessibility cannot read a selection, GLKB Cite may temporarily send Copy and then restore the previous clipboard content. Clipboard-history utilities can still observe that temporary value.",
+                description: "In apps that expose no selected text through Accessibility, GLKB Cite may briefly send Copy, read the text, and restore your previous clipboard — only when you click the badge, press ⌥⌘G, or choose Find Citations, never on its own. Clipboard-history utilities can still observe that temporary value; clipboards marked as concealed by password managers are never touched.",
                 showDivider: false
             ) {
-                AccentToggle(isOn: Binding(
+                LabeledSwitch(label: "Allow temporary Copy fallback", isOn: Binding(
                     get: { settings.compatibilityCaptureEnabled },
                     set: { coordinator.setCompatibilityCaptureEnabled($0) }
                 ))
@@ -313,8 +339,8 @@ private struct PrivacySettingsPane: View {
 
         SettingsGroup(label: "Data") {
             SettingsRow(
-                label: "Sent only after you click Find Citations or invoke an explicit command.",
-                description: "Badge appearance alone never contacts GLKB. GLKB Cite has no analytics or persistent query history.",
+                label: "Sent only after you click the badge, press ⌥⌘G, or choose Find Citations.",
+                description: "The selected sentence and the requested reference count are the only data sent, to the GLKB endpoint only. With the badge enabled, selection gestures are observed locally and the selected text is read on this Mac; it never leaves until you ask. GLKB Cite has no analytics or persistent query history.",
                 showDivider: false
             ) {
                 EmptyView()

@@ -1,41 +1,65 @@
 #!/bin/bash
+#
+# Assembles, signs and verifies the GLKB Cite application bundle and, unless
+# SKIP_DMG=1, its installer disk image.
+#
+# Version and build number come from the VERSION file at the repository root
+# unless VERSION / BUILD_NUMBER are set in the environment; the values in
+# Info.plist are placeholders that this script replaces.
+#
+# Build products live outside the checkout, in SWIFTPM_SCRATCH_ROOT (default
+# ~/Library/Caches/org.glkb.cite/build): Xcode 27's SwiftPM code-signs
+# intermediate products, and codesign rejects files that synced folders
+# (iCloud Drive, Dropbox, …) keep stamping with extended attributes. The bundle
+# is assembled and signed in a private temporary directory for the same
+# reason; only the verified artifacts are copied back into .build/app.
+#
+# Environment:
+#   BUILD_MODE=development|distribution   distribution adds the release gates
+#   CONFIGURATION=release|debug           UNIVERSAL=1 builds arm64 + x86_64
+#   SKIP_DMG=1                            bundle only
+#   PIN_DEPENDENCIES=1                    refuse any dependency resolution not
+#                                         already recorded in Package.resolved
+#   DEVELOPER_ID_APPLICATION              signing identity ("-" = ad hoc)
+#   SPARKLE_PUBLIC_KEY / SPARKLE_FEED_URL update channel (both or neither)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-BUILD_MODE="${BUILD_MODE:-development}"
-CONFIGURATION="${CONFIGURATION:-release}"
-VERSION="${VERSION:-0.1.1}"
-BUILD_NUMBER="${BUILD_NUMBER:-2}"
-UNIVERSAL="${UNIVERSAL:-0}"
-SKIP_DMG="${SKIP_DMG:-0}"
-SIGNING_IDENTITY="${DEVELOPER_ID_APPLICATION:--}"
-SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
-SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-}"
-APP_NAME="GLKB Cite"
-EXECUTABLE_NAME="GLKBCiteMac"
-OUTPUT_ROOT="$PROJECT_DIR/.build/app"
-# Assemble and sign inside a private temporary directory. Building in a
-# synced folder (iCloud Drive, Dropbox, …) breaks codesign because the file
-# provider keeps stamping extended attributes ("detritus") onto bundle files
-# between signing steps. The finished artifacts are copied to OUTPUT_ROOT.
-STAGING_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/glkb-cite-app.XXXXXX")"
-APP_PATH="$STAGING_ROOT/$APP_NAME.app"
-STAGED_DMG_PATH="$STAGING_ROOT/$APP_NAME.dmg"
-FINAL_APP_PATH="$OUTPUT_ROOT/$APP_NAME.app"
-DMG_PATH="$OUTPUT_ROOT/$APP_NAME.dmg"
 
 die() {
     printf 'build-app.sh: %s\n' "$*" >&2
     exit 64
 }
 
+version_field() {
+    sed -n "s/^$1=//p" "$PROJECT_DIR/VERSION" | head -n 1
+}
+
+BUILD_MODE="${BUILD_MODE:-development}"
+CONFIGURATION="${CONFIGURATION:-release}"
+VERSION="${VERSION:-$(version_field VERSION)}"
+BUILD_NUMBER="${BUILD_NUMBER:-$(version_field BUILD_NUMBER)}"
+UNIVERSAL="${UNIVERSAL:-0}"
+SKIP_DMG="${SKIP_DMG:-0}"
+PIN_DEPENDENCIES="${PIN_DEPENDENCIES:-0}"
+SIGNING_IDENTITY="${DEVELOPER_ID_APPLICATION:--}"
+SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-}"
+APP_NAME="GLKB Cite"
+EXECUTABLE_NAME="GLKBCiteMac"
+OUTPUT_ROOT="$PROJECT_DIR/.build/app"
+FINAL_APP_PATH="$OUTPUT_ROOT/$APP_NAME.app"
+DMG_PATH="$OUTPUT_ROOT/$APP_NAME.dmg"
+
 case "$BUILD_MODE" in
     development | distribution) ;;
     *) die "BUILD_MODE must be development or distribution." ;;
 esac
 
+[[ -n "$VERSION" && -n "$BUILD_NUMBER" ]] \
+    || die "VERSION and BUILD_NUMBER are missing from $PROJECT_DIR/VERSION and the environment."
 [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] \
     || die "VERSION must contain one to three dot-separated integers."
 [[ "$BUILD_NUMBER" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] \
@@ -61,47 +85,71 @@ if [[ "$BUILD_MODE" == "distribution" ]]; then
         || die "Distribution builds require DEVELOPER_ID_APPLICATION."
     [[ -n "$SPARKLE_PUBLIC_KEY" && -n "$SPARKLE_FEED_URL" ]] \
         || die "Distribution builds require the signed Sparkle feed key and HTTPS URL."
+    PIN_DEPENDENCIES=1
 fi
 
-# Build products live outside the checkout. Xcode 27's SwiftPM code-signs test
-# bundles and intermediate products, and codesign rejects files that synced
-# folders (iCloud Drive, Dropbox, …) keep stamping with extended attributes.
+# Fail here, not after a multi-minute build, when the identity is unusable.
+if [[ "$SIGNING_IDENTITY" != "-" ]]; then
+    security find-identity -v -p codesigning 2>/dev/null | grep -Fq "\"$SIGNING_IDENTITY\"" \
+        || die "Signing identity not found in the Keychain: $SIGNING_IDENTITY"
+fi
+
+for required in LICENSE NOTICE THIRD-PARTY-NOTICES.txt INSTALL.md; do
+    [[ -f "$PROJECT_DIR/$required" ]] || die "Required file is missing from the checkout: $required"
+done
+
+STAGING_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/glkb-cite-app.XXXXXX")"
+trap 'rm -rf "$STAGING_ROOT"' EXIT
+APP_PATH="$STAGING_ROOT/$APP_NAME.app"
+STAGED_DMG_PATH="$STAGING_ROOT/$APP_NAME.dmg"
+
 SCRATCH_ROOT="${SWIFTPM_SCRATCH_ROOT:-$HOME/Library/Caches/org.glkb.cite/build}"
 mkdir -p "$SCRATCH_ROOT"
+printf 'build-app.sh: %s %s (%s), build products in %s\n' "$APP_NAME" "$VERSION" "$BUILD_NUMBER" "$SCRATCH_ROOT" >&2
 
-swift_build() {
+common_package_arguments() {
     local arguments=(--package-path "$PROJECT_DIR")
     if [[ "${SWIFTPM_DISABLE_SANDBOX:-0}" == "1" ]]; then
         arguments+=(--disable-sandbox)
     fi
-    if [[ -n "${SDKROOT_OVERRIDE:-}" ]]; then
-        arguments+=(--sdk "$SDKROOT_OVERRIDE")
-    fi
     if [[ -n "${SWIFTPM_CACHE_PATH:-}" ]]; then
         arguments+=(--cache-path "$SWIFTPM_CACHE_PATH")
     fi
-    if [[ "$BUILD_MODE" == "distribution" ]]; then
+    printf '%s\n' "${arguments[@]}"
+}
+
+swift_build() {
+    local scratch="$1"
+    shift
+    local arguments=()
+    while IFS= read -r argument; do arguments+=("$argument"); done < <(common_package_arguments)
+    if [[ -n "${SDKROOT_OVERRIDE:-}" ]]; then
+        arguments+=(--sdk "$SDKROOT_OVERRIDE")
+    fi
+    if [[ "$PIN_DEPENDENCIES" == "1" ]]; then
+        # Fetch exactly what Package.resolved records, then refuse to resolve
+        # anything else during the build.
+        swift package "${arguments[@]}" --scratch-path "$scratch" resolve
         arguments+=(--disable-automatic-resolution)
     fi
-    swift build "${arguments[@]}" "$@"
+    swift build "${arguments[@]}" --scratch-path "$scratch" "$@"
 }
 
 build_current_architecture() {
     local scratch="$SCRATCH_ROOT/current"
-    swift_build --scratch-path "$scratch" -c "$CONFIGURATION" --product "$EXECUTABLE_NAME"
-    swift_build --scratch-path "$scratch" -c "$CONFIGURATION" --show-bin-path
+    swift_build "$scratch" -c "$CONFIGURATION" --product "$EXECUTABLE_NAME"
+    swift_build "$scratch" -c "$CONFIGURATION" --show-bin-path
 }
 
 build_architecture() {
     local architecture="$1"
     local triple="${architecture}-apple-macosx13.0"
     local scratch="$SCRATCH_ROOT/$architecture"
-    swift_build --scratch-path "$scratch" --triple "$triple" -c "$CONFIGURATION" --product "$EXECUTABLE_NAME"
-    swift_build --scratch-path "$scratch" --triple "$triple" -c "$CONFIGURATION" --show-bin-path
+    swift_build "$scratch" --triple "$triple" -c "$CONFIGURATION" --product "$EXECUTABLE_NAME"
+    swift_build "$scratch" --triple "$triple" -c "$CONFIGURATION" --show-bin-path
 }
 
 mkdir -p "$OUTPUT_ROOT"
-rm -rf "$APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources" "$APP_PATH/Contents/Frameworks"
 
 if [[ "$UNIVERSAL" == "1" ]]; then
@@ -123,19 +171,26 @@ if [[ "$EXECUTABLE_LOAD_COMMANDS" != *"@executable_path/../Frameworks"* ]]; then
         "$APP_PATH/Contents/MacOS/$EXECUTABLE_NAME"
 fi
 
-cp "$PROJECT_DIR/Sources/GLKBCiteMac/Resources/Info.plist" "$APP_PATH/Contents/Info.plist"
+INFO_PLIST="$APP_PATH/Contents/Info.plist"
+cp "$PROJECT_DIR/Sources/GLKBCiteMac/Resources/Info.plist" "$INFO_PLIST"
 cp "$PROJECT_DIR/Sources/GLKBCiteMac/Resources/PrivacyInfo.xcprivacy" \
     "$APP_PATH/Contents/Resources/PrivacyInfo.xcprivacy"
 cp "$PROJECT_DIR/THIRD-PARTY-NOTICES.txt" \
     "$APP_PATH/Contents/Resources/THIRD-PARTY-NOTICES.txt"
+# Apache-2.0 §4 requires redistributions to carry the license and NOTICE; the
+# About panel links the bundled copies.
+cp "$PROJECT_DIR/LICENSE" "$APP_PATH/Contents/Resources/LICENSE.txt"
+cp "$PROJECT_DIR/NOTICE" "$APP_PATH/Contents/Resources/NOTICE.txt"
 cp "$PROJECT_DIR/Sources/GLKBCiteMac/Resources/MenuBarIconTemplate.svg" \
     "$APP_PATH/Contents/Resources/MenuBarIconTemplate.svg"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_PATH/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP_PATH/Contents/Info.plist"
+# plutil takes each value as a single argument, so no character in a URL or
+# key can be mistaken for command syntax.
+plutil -replace CFBundleShortVersionString -string "$VERSION" "$INFO_PLIST"
+plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$INFO_PLIST"
 
 if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
-    /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_KEY" "$APP_PATH/Contents/Info.plist"
-    /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $SPARKLE_FEED_URL" "$APP_PATH/Contents/Info.plist"
+    plutil -replace SUPublicEDKey -string "$SPARKLE_PUBLIC_KEY" "$INFO_PLIST"
+    plutil -replace SUFeedURL -string "$SPARKLE_FEED_URL" "$INFO_PLIST"
 fi
 
 SPARKLE_SOURCE="$BIN_DIR/Sparkle.framework"
@@ -143,15 +198,17 @@ SPARKLE_SOURCE="$BIN_DIR/Sparkle.framework"
     || die "The selected SwiftPM bin directory does not contain Sparkle.framework: $SPARKLE_SOURCE"
 /usr/bin/ditto "$SPARKLE_SOURCE" "$APP_PATH/Contents/Frameworks/Sparkle.framework"
 
-ICON_TOOL="$OUTPUT_ROOT/render-icon"
-ICON_MASTER="$OUTPUT_ROOT/AppIcon-1024.png"
+# The icon renderer is compiled into and run from staging, never the checkout.
+ICON_TOOL="$STAGING_ROOT/render-icon"
+ICON_MASTER="$STAGING_ROOT/AppIcon-1024.png"
 if [[ -n "${SDKROOT_OVERRIDE:-}" ]]; then
     swiftc -sdk "$SDKROOT_OVERRIDE" "$PROJECT_DIR/Scripts/render-icon.swift" -o "$ICON_TOOL"
 else
     swiftc "$PROJECT_DIR/Scripts/render-icon.swift" -o "$ICON_TOOL"
 fi
 "$ICON_TOOL" "$ICON_MASTER" "$APP_PATH/Contents/Resources/AppIcon.icns"
-/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$APP_PATH/Contents/Info.plist"
+plutil -replace CFBundleIconFile -string AppIcon "$INFO_PLIST"
+plutil -lint "$INFO_PLIST" >/dev/null || die "The generated Info.plist is invalid."
 
 SPARKLE_FRAMEWORK="$APP_PATH/Contents/Frameworks/Sparkle.framework"
 SPARKLE_VERSION_DIR="$SPARKLE_FRAMEWORK/Versions/B"
@@ -203,27 +260,9 @@ else
 fi
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-if [[ "$SKIP_DMG" == "1" ]]; then
-    rm -f "$DMG_PATH"
-else
-    rm -f "$DMG_PATH"
-    DMG_STAGE="$(mktemp -d "$STAGING_ROOT/dmg-stage.XXXXXX")"
-    cleanup_dmg_stage() {
-        rm -rf "$DMG_STAGE"
-    }
-    trap cleanup_dmg_stage EXIT
-    /usr/bin/ditto "$APP_PATH" "$DMG_STAGE/$APP_NAME.app"
-    ln -s /Applications "$DMG_STAGE/Applications"
-    /usr/bin/ditto "$PROJECT_DIR/INSTALL.md" "$DMG_STAGE/Installation Guide.md"
-    [[ -L "$DMG_STAGE/Applications" && "$(readlink "$DMG_STAGE/Applications")" == "/Applications" ]] \
-        || die "The installer staging folder is missing its Applications shortcut."
-    hdiutil create -volname "$APP_NAME Installer" -srcfolder "$DMG_STAGE" -ov -format UDZO "$STAGED_DMG_PATH" >/dev/null
-    cleanup_dmg_stage
-    trap - EXIT
-    if [[ "$SIGNING_IDENTITY" != "-" ]]; then
-        codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$STAGED_DMG_PATH"
-        codesign --verify --verbose=2 "$STAGED_DMG_PATH"
-    fi
+if [[ "$SKIP_DMG" != "1" ]]; then
+    DEVELOPER_ID_APPLICATION="$SIGNING_IDENTITY" \
+        /bin/bash "$SCRIPT_DIR/package-dmg.sh" "$APP_PATH" "$STAGED_DMG_PATH"
 fi
 
 if [[ "$BUILD_MODE" == "distribution" ]]; then
@@ -235,12 +274,11 @@ else
 fi
 
 # Publish the verified artifacts from staging into the repository build folder.
-rm -rf "$FINAL_APP_PATH"
+rm -rf "$FINAL_APP_PATH" "$DMG_PATH"
 /usr/bin/ditto "$APP_PATH" "$FINAL_APP_PATH"
 if [[ "$SKIP_DMG" != "1" ]]; then
     /usr/bin/ditto "$STAGED_DMG_PATH" "$DMG_PATH"
 fi
-rm -rf "$STAGING_ROOT"
 
 printf '%s\n' "$FINAL_APP_PATH"
 if [[ "$SKIP_DMG" != "1" ]]; then

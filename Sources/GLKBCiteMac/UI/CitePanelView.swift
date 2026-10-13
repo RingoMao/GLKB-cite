@@ -5,6 +5,8 @@ import SwiftUI
 /// Content of the 460pt "Cite" modal: one box per citation style (click to
 /// copy), BibTeX / EndNote exports, and the confirmation toast. Copying keeps
 /// the modal open, as in the mockup; ✕, Escape, or the dimmed panel close it.
+/// The citations re-render as soon as PubMed's volume, pages and DOI arrive;
+/// the footer says whether they have.
 struct CitePanelView: View {
     @EnvironmentObject private var coordinator: AppCoordinator
 
@@ -50,7 +52,11 @@ struct CitePanelView: View {
                         Text(style.rawValue)
                             .font(.system(size: 12.5, weight: .bold))
                             .padding(.top, style == CitationFormatter.Style.allCases.first ? 0 : 8)
-                        FormatBox(citation: citation) {
+                            // The visible label matches the mockup; the edition or
+                            // variant (e.g. Chicago notes-bibliography) is a tooltip.
+                            .help(style.longName)
+                            .accessibilityLabel(style.longName)
+                        FormatBox(label: "\(style.longName) citation", citation: citation) {
                             CitationPasteboard.write(citation)
                             coordinator.showToast("\(style.rawValue) citation copied to clipboard")
                         }
@@ -76,6 +82,21 @@ struct CitePanelView: View {
                 .buttonStyle(OutlineButtonStyle())
 
                 Spacer()
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    if let article = reference.article, article.isRetracted {
+                        Label("PubMed marks this article as retracted", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Theme.danger)
+                            .accessibilityAddTraits(.isStaticText)
+                    } else if let article = reference.article, article.isPreprint {
+                        Text("Preprint: not peer reviewed")
+                            .foregroundStyle(Theme.amber)
+                    }
+                    detailStatus
+                        .foregroundStyle(.secondary)
+                }
+                .font(.system(size: 10.5))
+                .multilineTextAlignment(.trailing)
             }
             .padding(EdgeInsets(top: 14, leading: 20, bottom: 18, trailing: 20))
         }
@@ -89,6 +110,25 @@ struct CitePanelView: View {
         )
     }
 
+    @ViewBuilder
+    private var detailStatus: some View {
+        switch coordinator.citeDetailStatus {
+        case .idle:
+            EmptyView()
+        case .loading:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Fetching details from PubMed…")
+            }
+        case .fromPubMed:
+            Text("Volume, pages and DOI from PubMed")
+        case .unavailable(let reason):
+            Text("PubMed details unavailable; GLKB data only")
+                .help(reason)
+        }
+    }
+
+    /// Exports are plain text by nature (BibTeX, RIS).
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -98,6 +138,8 @@ struct CitePanelView: View {
 /// A citation rendering that copies on click and tints on hover. Italic
 /// runs (journal titles) come through the attributed string.
 private struct FormatBox: View {
+    /// Accessible name of the control ("APA 7 citation").
+    let label: String
     let citation: FormattedCitation
     let action: () -> Void
 
@@ -119,6 +161,9 @@ private struct FormatBox: View {
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
         }
-        .help("Copy this citation")
+        .help("Copy this \(label)")
+        .accessibilityLabel(label)
+        .accessibilityValue(citation.plainText)
+        .accessibilityHint("Copies the citation to the clipboard")
     }
 }

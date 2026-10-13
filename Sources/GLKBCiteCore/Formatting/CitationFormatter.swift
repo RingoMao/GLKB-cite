@@ -2,10 +2,13 @@ import Foundation
 
 /// Formats a single `LiteratureReference` in common bibliographic styles.
 ///
-/// GLKB references carry PubMed metadata (authors, title, journal, year and
-/// PMID) but no volume, issue, page or DOI fields, so each style ends with
-/// the locator it gives an online article without those fields: the PubMed
-/// URL (MLA, APA, Chicago, Harvard) or the PMID (Vancouver).
+/// GLKB references carry a title, free-form authors, a journal name and a
+/// year. When the reference also carries PubMed's record (`article`), the
+/// citation gains what every style expects of a journal article: structured
+/// author names, the journal's standard abbreviation, volume, issue, pages
+/// and DOI. Without it, each style ends with the locator it gives an online
+/// article: the PubMed URL (MLA, APA, Chicago, Harvard) or the PMID
+/// (Vancouver).
 ///
 /// Author strings arrive in several shapes: "C Caelles" from GLKB,
 /// "Caelles C" from PubMed, "Caelles, Carme", "Carme Caelles", or a group
@@ -18,7 +21,22 @@ public enum CitationFormatter {
         case chicago = "Chicago"
         case harvard = "Harvard"
         case vancouver = "Vancouver"
+
+        /// The edition or variant the style follows, for labels with room
+        /// for it (tooltips, accessibility descriptions).
+        public var longName: String {
+            switch self {
+            case .mla: "MLA 9"
+            case .apa: "APA 7"
+            case .chicago: "Chicago 17 (notes-bibliography)"
+            case .harvard: "Harvard (Cite Them Right)"
+            case .vancouver: "Vancouver (NLM)"
+            }
+        }
     }
+
+    /// Shown in place of a missing title so a citation is never a bare year.
+    public static let untitledPlaceholder = "[Untitled]"
 
     /// - Parameter accessDate: the date in Harvard's "Accessed" note. It
     ///   defaults to now and is injectable for deterministic tests.
@@ -31,135 +49,414 @@ public enum CitationFormatter {
     }
 
     /// The citation as styled runs. Journal titles are italic in MLA, APA,
-    /// Chicago and Harvard, as is the PubMed database name in MLA's second
-    /// container; article titles stay roman in every style, and Vancouver
-    /// uses no italics at all.
+    /// Chicago and Harvard, as are APA's volume numbers and the PubMed
+    /// database name in MLA's second container; article titles stay roman in
+    /// every style, and Vancouver uses no italics at all.
     public static func formattedCitation(
         for reference: LiteratureReference,
         style: Style,
         accessDate: Date = Date()
     ) -> FormattedCitation {
-        let authors = reference.authors.compactMap(AuthorName.parse)
-        let title = cleanTitle(reference.title)
-        let titleSentence = endsWithTerminalPunctuation(title) ? title : "\(title)."
-        let journal = clean(reference.journal ?? "")
-        let year = year(from: reference.date)
-        let pmid = clean(reference.pmid)
-        let url = (PubMed.url(for: reference.pmid) ?? reference.url)?.absoluteString ?? ""
-        var parts: [Runs] = []
+        let record = CitationRecord(reference)
+        let runs: Runs
+        switch (style, record.kind) {
+        case (.mla, .journalArticle): runs = mla(record)
+        case (.apa, .journalArticle): runs = apa(record)
+        case (.chicago, .journalArticle): runs = chicago(record)
+        case (.harvard, .journalArticle): runs = harvard(record, accessDate: accessDate)
+        case (.vancouver, .journalArticle): runs = vancouver(record)
+        case (.mla, .bookChapter): runs = mlaChapter(record)
+        case (.apa, .bookChapter): runs = apaChapter(record)
+        case (.chicago, .bookChapter): runs = chicagoChapter(record)
+        case (.harvard, .bookChapter): runs = harvardChapter(record, accessDate: accessDate)
+        case (.vancouver, .bookChapter): runs = vancouverChapter(record)
+        }
+        return FormattedCitation(runs: runs)
+    }
 
+    // MARK: - Styles
+
+    /// MLA 9: Author. "Title." Journal, vol. V, no. I, Year, pp. P, DOI.
+    /// Without a DOI the database and its URL form a second container.
+    private static func mla(_ record: CitationRecord) -> Runs {
+        var parts: [Runs] = []
+        if let head = authorBlock(record.authors, style: .mla) { parts.append(plain(head)) }
+        parts.append(plain("\u{201C}\(record.titleSentence)\u{201D}"))
+
+        var container: [Runs] = []
+        if !record.journal.isEmpty { container.append(italic(record.journal)) }
+        if !record.volume.isEmpty { container.append(plain("vol. \(record.volume)")) }
+        if !record.issue.isEmpty { container.append(plain("no. \(record.issue)")) }
+        if !record.year.isEmpty { container.append(plain(record.year)) }
+        if let pages = record.labelledPages(abbreviated: true) { container.append(plain(pages)) }
+        if let doi = record.doiURL {
+            container.append(plain(doi.absoluteString))
+            parts.append(joined(container, separator: ", ") + plain("."))
+        } else {
+            if !container.isEmpty { parts.append(joined(container, separator: ", ") + plain(".")) }
+            if let url = record.pubmedURL {
+                parts.append(italic("PubMed") + plain(", \(url.absoluteString)."))
+            } else if let url = record.fallbackURL {
+                parts.append(plain("\(url.absoluteString)."))
+            }
+        }
+        return joined(parts, separator: " ")
+    }
+
+    /// APA 7: Author, A. A., & Author, B. B. (Year). Title. Journal, V(I),
+    /// pages. https://doi.org/…
+    private static func apa(_ record: CitationRecord) -> Runs {
+        let date = record.year.isEmpty ? "n.d." : record.year
+        var parts: [Runs] = []
+        if let head = authorBlock(record.authors, style: .apa) {
+            parts += [plain(head), plain("(\(date))."), plain(record.titleSentence)]
+        } else {
+            parts += [plain(record.titleSentence), plain("(\(date)).")]
+        }
+        var source: [Runs] = []
+        if !record.journal.isEmpty { source.append(italic(record.journal)) }
+        if !record.volume.isEmpty {
+            // APA italicises the volume but not the issue in parentheses.
+            source.append(italic(record.volume) + (record.issue.isEmpty ? [] : plain("(\(record.issue))")))
+        }
+        if let pages = record.pages {
+            // APA 7 names an article number as such instead of a page, and
+            // has no slot for a bare identifier such as an arXiv number.
+            switch record.locator {
+            case .pages: source.append(plain(pages.full))
+            case .articleNumber: source.append(plain("Article \(pages.start)"))
+            case .identifier: break
+            }
+        }
+        if !source.isEmpty { parts.append(joined(source, separator: ", ") + plain(".")) }
+        if let url = record.locatorURL { parts.append(plain(url.absoluteString)) }
+        return joined(parts, separator: " ")
+    }
+
+    /// Chicago 17 bibliography: Author, A., B. Author, and C. Author.
+    /// "Title." Journal V, no. I (Year): pages. https://doi.org/….
+    private static func chicago(_ record: CitationRecord) -> Runs {
+        var parts: [Runs] = []
+        if let head = authorBlock(record.authors, style: .chicago) { parts.append(plain(head)) }
+        parts.append(plain("\u{201C}\(record.titleSentence)\u{201D}"))
+        if !record.volume.isEmpty {
+            var source = record.journal.isEmpty ? plain(record.volume) : italic(record.journal) + plain(" \(record.volume)")
+            if !record.issue.isEmpty { source += plain(", no. \(record.issue)") }
+            if !record.year.isEmpty { source += plain(" (\(record.year))") }
+            if let pages = record.pages { source += plain(": \(pages.abbreviated)") }
+            parts.append(source + plain("."))
+        } else if let source = container(record.journal, record.year, separator: ", ", undated: "n.d.", italicJournal: true) {
+            parts.append(source)
+        }
+        if let url = record.locatorURL { parts.append(plain("\(url.absoluteString).")) }
+        return joined(parts, separator: " ")
+    }
+
+    /// Harvard (Cite Them Right): Author, A., Author, B. and Author, C.
+    /// (Year) 'Title', Journal, V(I), pp. pages. Available at: URL
+    /// (Accessed: Day Month Year).
+    private static func harvard(_ record: CitationRecord, accessDate: Date) -> Runs {
+        let date = record.year.isEmpty ? "no date" : record.year
+        let quotedTitle = "\u{2018}\(record.title)\u{2019}"
+        var source: [Runs] = []
+        if !record.journal.isEmpty { source.append(italic(record.journal)) }
+        if !record.volume.isEmpty { source.append(plain(record.volumeWithIssue)) }
+        if let pages = record.labelledPages(abbreviated: false) { source.append(plain(pages)) }
+        var runs: Runs
+        if let authorsText = authorBlock(record.authors, style: .harvard) {
+            runs = plain("\(authorsText) (\(date)) \(quotedTitle)")
+            runs += source.isEmpty ? plain(record.titleStop) : plain(", ") + joined(source, separator: ", ") + plain(".")
+        } else {
+            runs = plain("\(quotedTitle) (\(date))")
+            runs += source.isEmpty ? plain(".") : plain(" ") + joined(source, separator: ", ") + plain(".")
+        }
+        if let url = record.locatorURL {
+            runs += plain(" Available at: \(url.absoluteString) (Accessed: \(harvardDate(accessDate))).")
+        }
+        return runs
+    }
+
+    /// Vancouver / NLM: Author AA, Author BB. Title. J Abbrev. Year Mon
+    /// Day;V(I):pages. doi: …. PMID: n.
+    private static func vancouver(_ record: CitationRecord) -> Runs {
+        var parts: [String] = []
+        if let head = authorBlock(record.authors, style: .vancouver) { parts.append(head) }
+        parts.append(record.titleSentence)
+        var journal = record.journalAbbreviation.isEmpty ? record.journal : record.journalAbbreviation
+        if record.isPreprint, !journal.isEmpty { journal += " [Preprint]" }
+        if !journal.isEmpty { parts.append("\(journal).") }
+
+        let date = [record.year, record.monthName, record.dayNumber].filter { !$0.isEmpty }.joined(separator: " ")
+        var source = date
+        if !record.volume.isEmpty {
+            source += (source.isEmpty ? "" : ";") + record.volumeWithIssue
+        }
+        if let pages = record.pages {
+            source += source.isEmpty ? pages.medline : ":\(pages.medline)"
+        }
+        if !source.isEmpty { parts.append("\(source).") }
+        if !record.doi.isEmpty { parts.append("doi: \(record.doi).") }
+        if !record.pmid.isEmpty { parts.append("PMID: \(record.pmid).") }
+        return plain(parts.joined(separator: " "))
+    }
+
+    // MARK: - Book chapters (NCBI Bookshelf: StatPearls, GeneReviews, …)
+
+    /// MLA 9: Author. "Chapter." Book, edited by …, Publisher, Year. Database, URL.
+    private static func mlaChapter(_ record: CitationRecord) -> Runs {
+        var parts: [Runs] = []
+        if let head = authorBlock(record.authors, style: .mla) { parts.append(plain(head)) }
+        parts.append(plain("\u{201C}\(record.titleSentence)\u{201D}"))
+        var container: [Runs] = []
+        if !record.bookTitle.isEmpty { container.append(italic(record.bookTitle)) }
+        if let editors = editorList(record.editors, style: .mla) { container.append(plain("edited by \(editors)")) }
+        if !record.publisher.isEmpty { container.append(plain(record.publisher)) }
+        if !record.year.isEmpty { container.append(plain(record.year)) }
+        if !container.isEmpty { parts.append(joined(container, separator: ", ") + plain(".")) }
+        if let url = record.bookshelfURL {
+            parts.append(italic("NCBI Bookshelf") + plain(", \(url.absoluteString)."))
+        } else if let url = record.pubmedURL {
+            parts.append(italic("PubMed") + plain(", \(url.absoluteString)."))
+        }
+        return joined(parts, separator: " ")
+    }
+
+    /// APA 7: Author (Year). Chapter. In E. Editor (Ed.), Book. Publisher. URL
+    private static func apaChapter(_ record: CitationRecord) -> Runs {
+        let date = record.year.isEmpty ? "n.d." : record.year
+        var parts: [Runs] = []
+        if let head = authorBlock(record.authors, style: .apa) {
+            parts += [plain(head), plain("(\(date))."), plain(record.titleSentence)]
+        } else {
+            parts += [plain(record.titleSentence), plain("(\(date)).")]
+        }
+        if !record.bookTitle.isEmpty {
+            var source = plain("In ")
+            if let editors = editorList(record.editors, style: .apa) {
+                source += plain("\(editors) (\(record.editors.count == 1 ? "Ed." : "Eds.")), ")
+            }
+            source += italic(record.bookTitle) + plain(".")
+            parts.append(source)
+        }
+        if !record.publisher.isEmpty { parts.append(plain("\(record.publisher).")) }
+        if let url = record.locatorURL { parts.append(plain(url.absoluteString)) }
+        return joined(parts, separator: " ")
+    }
+
+    /// Chicago 17: Author. "Chapter." In Book, edited by …. Place: Publisher, Year. URL.
+    private static func chicagoChapter(_ record: CitationRecord) -> Runs {
+        var parts: [Runs] = []
+        if let head = authorBlock(record.authors, style: .chicago) { parts.append(plain(head)) }
+        parts.append(plain("\u{201C}\(record.titleSentence)\u{201D}"))
+        if !record.bookTitle.isEmpty {
+            var source = plain("In ") + italic(record.bookTitle)
+            if let editors = editorList(record.editors, style: .chicago) { source += plain(", edited by \(editors)") }
+            parts.append(source + plain("."))
+        }
+        var imprint: [String] = []
+        if !record.publisher.isEmpty {
+            imprint.append(record.publisherLocation.isEmpty ? record.publisher : "\(record.publisherLocation): \(record.publisher)")
+        }
+        if !record.year.isEmpty { imprint.append(record.year) }
+        if !imprint.isEmpty { parts.append(plain(imprint.joined(separator: ", ") + ".")) }
+        if let url = record.locatorURL { parts.append(plain("\(url.absoluteString).")) }
+        return joined(parts, separator: " ")
+    }
+
+    /// Harvard: Author (Year) 'Chapter', in Editor, E. (ed.) Book. Place:
+    /// Publisher. Available at: URL (Accessed: date).
+    private static func harvardChapter(_ record: CitationRecord, accessDate: Date) -> Runs {
+        let date = record.year.isEmpty ? "no date" : record.year
+        let quotedTitle = "\u{2018}\(record.title)\u{2019}"
+        var runs: Runs
+        if let authorsText = authorBlock(record.authors, style: .harvard) {
+            runs = plain("\(authorsText) (\(date)) \(quotedTitle)")
+        } else {
+            runs = plain("\(quotedTitle) (\(date))")
+        }
+        if !record.bookTitle.isEmpty {
+            runs += plain(", in ")
+            if let editors = editorList(record.editors, style: .harvard) {
+                runs += plain("\(editors) (\(record.editors.count == 1 ? "ed." : "eds")) ")
+            }
+            runs += italic(record.bookTitle) + plain(".")
+        } else {
+            runs += plain(record.titleStop)
+        }
+        if !record.publisher.isEmpty {
+            runs += plain(record.publisherLocation.isEmpty ? " \(record.publisher)." : " \(record.publisherLocation): \(record.publisher).")
+        }
+        if let url = record.locatorURL {
+            runs += plain(" Available at: \(url.absoluteString) (Accessed: \(harvardDate(accessDate))).")
+        }
+        return runs
+    }
+
+    /// NLM, as PubMed itself cites Bookshelf chapters: Author AA. Chapter.
+    /// Year Mon Day. In: Editor AA, editors. Book [Internet]. Place:
+    /// Publisher; Year Mon–. PMID: n.
+    private static func vancouverChapter(_ record: CitationRecord) -> Runs {
+        var parts: [String] = []
+        if let head = authorBlock(record.authors, style: .vancouver) { parts.append(head) }
+        parts.append(record.titleSentence)
+        if let updated = record.updatedText { parts.append("\(updated).") }
+        var book = "In: "
+        if !record.editors.isEmpty {
+            let shown = record.editors.prefix(6).map(\.vancouver).joined(separator: ", ")
+            book += (record.editors.count > 6 ? "\(shown), et al." : shown)
+                + (record.editors.count == 1 ? ", editor. " : ", editors. ")
+        }
+        book += record.bookTitle.isEmpty ? "[Internet]." : "\(record.bookTitle) [Internet]."
+        parts.append(book)
+        var imprint = ""
+        if !record.publisher.isEmpty {
+            imprint = record.publisherLocation.isEmpty ? record.publisher : "\(record.publisherLocation): \(record.publisher)"
+        }
+        if !record.year.isEmpty {
+            let since = [record.year, record.monthName].filter { !$0.isEmpty }.joined(separator: " ")
+            imprint += (imprint.isEmpty ? "" : "; ") + since + "\u{2013}"
+        }
+        if !imprint.isEmpty { parts.append("\(imprint).") }
+        if let url = record.bookshelfURL { parts.append("Available from: \(url.absoluteString)") }
+        if !record.pmid.isEmpty { parts.append("PMID: \(record.pmid).") }
+        return plain(parts.joined(separator: " "))
+    }
+
+    /// Editors in a style's natural order, or nil when there are none.
+    private static func editorList(_ editors: [AuthorName], style: Style) -> String? {
+        guard !editors.isEmpty else { return nil }
         switch style {
         case .mla:
-            // Author. "Title." Journal, Year. Database, URL.
-            if let head = authorBlock(authors, style: style) { parts.append(plain(head)) }
-            parts.append(plain("\u{201C}\(titleSentence)\u{201D}"))
-            if let container = container(journal, year, separator: ", ", undated: nil, italicJournal: true) {
-                parts.append(container)
+            // MLA: two editors joined by "and", three or more → et al.
+            let names = editors.map { $0.natural(fullGivenNames: true) }
+            switch names.count {
+            case 1: return names[0]
+            case 2: return "\(names[0]) and \(names[1])"
+            default: return "\(names[0]) et al."
             }
-            if !url.isEmpty { parts.append(italic("PubMed") + plain(", \(url).")) }
-
         case .apa:
-            // Author, A. A., & Author, B. B. (Year). Title. Journal. URL
-            let date = year.isEmpty ? "n.d." : year
-            if let head = authorBlock(authors, style: style) {
-                parts += [plain(head), plain("(\(date))."), plain(titleSentence)]
-            } else {
-                parts += [plain(titleSentence), plain("(\(date)).")]
-            }
-            if !journal.isEmpty { parts.append(italic(journal) + plain(".")) }
-            if !url.isEmpty { parts.append(plain(url)) }
-
+            let names = editors.map { $0.natural(fullGivenNames: false) }
+            if names.count == 1 { return names[0] }
+            return names.dropLast().joined(separator: ", ") + (names.count > 2 ? ", & " : " & ") + names[names.count - 1]
         case .chicago:
-            // Author, A., B. Author, and C. Author. "Title." Journal, Year. URL.
-            if let head = authorBlock(authors, style: style) { parts.append(plain(head)) }
-            parts.append(plain("\u{201C}\(titleSentence)\u{201D}"))
-            if let container = container(journal, year, separator: ", ", undated: "n.d.", italicJournal: true) {
-                parts.append(container)
+            let names = editors.map { $0.natural(fullGivenNames: true) }
+            switch names.count {
+            case 1: return names[0]
+            case 2: return "\(names[0]) and \(names[1])"
+            case 3 ... 10: return names.dropLast().joined(separator: ", ") + ", and " + names[names.count - 1]
+            default: return names.prefix(7).joined(separator: ", ") + ", et al."
             }
-            if !url.isEmpty { parts.append(plain("\(url).")) }
-
         case .harvard:
-            // Author, A., Author, B. and Author, C. (Year) 'Title', Journal.
-            // Available at: URL (Accessed: Day Month Year).
-            let date = year.isEmpty ? "no date" : year
-            let quotedTitle = "\u{2018}\(title)\u{2019}"
-            let titleStop = endsWithTerminalPunctuation(title) ? "" : "."
-            var runs: Runs
-            if let authorsText = authorBlock(authors, style: style) {
-                runs = plain("\(authorsText) (\(date)) \(quotedTitle)")
-                runs += journal.isEmpty ? plain(titleStop) : plain(", ") + italic(journal) + plain(".")
-            } else {
-                runs = plain("\(quotedTitle) (\(date))")
-                runs += journal.isEmpty ? plain(".") : plain(" ") + italic(journal) + plain(".")
+            let names = editors.map { $0.inverted(fullGivenNames: false) }
+            switch names.count {
+            case 1: return names[0]
+            case 2: return "\(names[0]) and \(names[1])"
+            case 3: return "\(names[0]), \(names[1]) and \(names[2])"
+            default: return "\(names[0]) et al."
             }
-            if !url.isEmpty {
-                runs += plain(" Available at: \(url) (Accessed: \(harvardDate(accessDate))).")
-            }
-            return FormattedCitation(runs: runs)
-
         case .vancouver:
-            // Author AA, Author BB. Title. Journal. Year. PMID: n.
-            if let head = authorBlock(authors, style: style) { parts.append(plain(head)) }
-            parts.append(plain(titleSentence))
-            if let container = container(journal, year, separator: ". ", undated: nil, italicJournal: false) {
-                parts.append(container)
-            }
-            if !pmid.isEmpty { parts.append(plain("PMID: \(pmid).")) }
+            return nil
         }
-        return FormattedCitation(runs: joined(parts))
     }
+
+    // MARK: - Exports
 
     /// BibTeX `@article` entry.
     public static func bibtex(for reference: LiteratureReference) -> String {
-        let pmid = clean(reference.pmid)
-        let key = pmid.isEmpty ? "glkb" : "pmid\(pmid)"
-        let authors = reference.authors.compactMap(AuthorName.parse)
+        let record = CitationRecord(reference)
+        let isChapter = record.kind == .bookChapter
         // Field values are escaped here, piece by piece, so the braces that
-        // protect a group author's name survive.
-        var fields: [(String, String)] = []
-        if !authors.isEmpty {
-            fields.append(("author", authors.map { $0.bibtex(escaping: escapeBibTeX) }.joined(separator: " and ")))
+        // protect a group author's name survive. `raw` values (BibTeX month
+        // macros) are emitted without braces.
+        var fields: [(name: String, value: String, raw: Bool)] = []
+        if !record.authors.isEmpty {
+            fields.append(("author", record.authors.map { $0.bibtex(escaping: escapeBibTeX) }.joined(separator: " and "), false))
         }
-        fields.append(("title", escapeBibTeX(cleanTitle(reference.title))))
-        if let journal = reference.journal, !clean(journal).isEmpty {
-            fields.append(("journal", escapeBibTeX(clean(journal))))
+        // The inner braces keep the title's capitalisation as written; most
+        // BibTeX styles lower-case an unprotected title.
+        fields.append(("title", "{\(escapeBibTeX(record.title))}", false))
+        if isChapter {
+            if !record.bookTitle.isEmpty { fields.append(("booktitle", escapeBibTeX(record.bookTitle), false)) }
+            if !record.editors.isEmpty {
+                fields.append(("editor", record.editors.map { $0.bibtex(escaping: escapeBibTeX) }.joined(separator: " and "), false))
+            }
+            if !record.publisher.isEmpty { fields.append(("publisher", escapeBibTeX(record.publisher), false)) }
+            if !record.publisherLocation.isEmpty { fields.append(("address", escapeBibTeX(record.publisherLocation), false)) }
+        } else if !record.journal.isEmpty {
+            fields.append(("journal", escapeBibTeX(record.journal), false))
         }
-        let year = year(from: reference.date)
-        if !year.isEmpty { fields.append(("year", year)) }
-        if !pmid.isEmpty { fields.append(("pmid", pmid)) }
-        if let url = PubMed.url(for: reference.pmid) ?? reference.url {
-            fields.append(("url", escapeBibTeX(url.absoluteString)))
+        if !record.year.isEmpty { fields.append(("year", record.year, false)) }
+        if let macro = record.monthMacro { fields.append(("month", macro, true)) }
+        if !record.volume.isEmpty { fields.append(("volume", escapeBibTeX(record.volume), false)) }
+        if !record.issue.isEmpty { fields.append(("number", escapeBibTeX(record.issue), false)) }
+        if let pages = record.pages {
+            fields.append(("pages", escapeBibTeX(pages.end.map { "\(pages.start)--\($0)" } ?? pages.start), false))
+        }
+        if !record.doi.isEmpty { fields.append(("doi", record.doi.filter { $0 != "{" && $0 != "}" }, false)) }
+        if !record.pmid.isEmpty { fields.append(("pmid", record.pmid, false)) }
+        if let url = record.bookshelfURL ?? record.pubmedURL ?? record.fallbackURL {
+            // URLs are not TeX-escaped: the url/hyperref packages read the
+            // field verbatim, and an escaped "%" would break the link.
+            fields.append(("url", url.absoluteString.filter { $0 != "{" && $0 != "}" && !$0.isWhitespace }, false))
+        }
+        if record.isRetracted {
+            fields.append(("note", "Retracted publication", false))
+        } else if record.isPreprint {
+            fields.append(("note", "Preprint", false))
         }
         let body = fields
-            .map { "  \($0.0) = {\($0.1)}" }
+            .map { $0.raw ? "  \($0.name) = \($0.value)" : "  \($0.name) = {\($0.value)}" }
             .joined(separator: ",\n")
-        return "@article{\(key),\n\(body)\n}"
+        return "@\(isChapter ? "incollection" : "article"){\(bibtexKey(for: reference)),\n\(body)\n}"
     }
 
-    /// EndNote-compatible RIS record.
+    /// EndNote-compatible RIS record: CRLF line ends and a terminating
+    /// newline, as the RIS specification and EndNote's importer expect.
     public static func ris(for reference: LiteratureReference) -> String {
-        var lines = ["TY  - JOUR"]
-        for author in reference.authors.compactMap(AuthorName.parse) {
+        let record = CitationRecord(reference)
+        let isChapter = record.kind == .bookChapter
+        var lines = [isChapter ? "TY  - CHAP" : "TY  - JOUR"]
+        for author in record.authors {
             lines.append("AU  - \(author.ris)")
         }
-        lines.append("TI  - \(cleanTitle(reference.title))")
-        if let journal = reference.journal, !clean(journal).isEmpty {
-            // T2 is the periodical title for a journal article; JO is an
-            // abbreviation field that EndNote files as "Alternate Journal".
-            lines.append("T2  - \(clean(journal))")
+        lines.append("TI  - \(record.title)")
+        if isChapter {
+            if !record.bookTitle.isEmpty { lines.append("T2  - \(record.bookTitle)") }
+            for editor in record.editors { lines.append("A2  - \(editor.ris)") }
+            if !record.publisher.isEmpty { lines.append("PB  - \(record.publisher)") }
+            if !record.publisherLocation.isEmpty { lines.append("CY  - \(record.publisherLocation)") }
+        } else if !record.journal.isEmpty {
+            // T2 is the periodical title for a journal article; JO carries
+            // the standard abbreviation (EndNote's "Alternate Journal").
+            lines.append("T2  - \(record.journal)")
         }
-        let year = year(from: reference.date)
-        if !year.isEmpty { lines.append("PY  - \(year)") }
-        let pmid = clean(reference.pmid)
-        if !pmid.isEmpty {
-            lines.append("AN  - \(pmid)")
+        if !isChapter, !record.journalAbbreviation.isEmpty, record.journalAbbreviation != record.journal {
+            lines.append("JO  - \(record.journalAbbreviation)")
+        }
+        if !record.volume.isEmpty { lines.append("VL  - \(record.volume)") }
+        if !record.issue.isEmpty { lines.append("IS  - \(record.issue)") }
+        if let pages = record.pages {
+            lines.append("SP  - \(pages.start)")
+            if let end = pages.end { lines.append("EP  - \(end)") }
+        }
+        if !record.year.isEmpty {
+            lines.append("PY  - \(record.year)")
+            if let month = record.monthNumber {
+                let day = Int(record.day).map { String(format: "%02d", $0) } ?? ""
+                lines.append("DA  - \(record.year)/\(String(format: "%02d", month))/\(day)/")
+            }
+        }
+        if !record.doi.isEmpty { lines.append("DO  - \(record.doi)") }
+        if !record.pmid.isEmpty {
+            lines.append("AN  - \(record.pmid)")
             lines.append("DB  - PubMed")
         }
-        if let url = PubMed.url(for: reference.pmid) ?? reference.url {
+        if let url = record.bookshelfURL ?? record.pubmedURL ?? record.fallbackURL {
             lines.append("UR  - \(url.absoluteString)")
         }
+        if record.isRetracted { lines.append("N1  - Retracted publication") }
         lines.append("ER  - ")
-        return lines.joined(separator: "\n")
+        return lines.joined(separator: "\r\n") + "\r\n"
     }
 
     // MARK: - Author lists
@@ -251,11 +548,11 @@ public enum CitationFormatter {
     private static func plain(_ text: String) -> Runs { [FormattedCitation.Run(text: text, isItalic: false)] }
     private static func italic(_ text: String) -> Runs { [FormattedCitation.Run(text: text, isItalic: true)] }
 
-    /// Joins the parts of a citation with single spaces.
-    private static func joined(_ parts: [Runs]) -> Runs {
+    /// Joins the parts of a citation with `separator`.
+    private static func joined(_ parts: [Runs], separator: String) -> Runs {
         var result: Runs = []
         for (index, part) in parts.enumerated() {
-            if index > 0 { result += plain(" ") }
+            if index > 0 { result += plain(separator) }
             result += part
         }
         return result
@@ -263,20 +560,49 @@ public enum CitationFormatter {
 
     // MARK: - Pieces
 
-    /// Extracts a 4-digit year from free-form date text such as
-    /// `"2024"`, `"2024 Mar"`, or `"2024-03-12"`.
-    private static func year(from date: String?) -> String {
+    /// Years a publication date can plausibly carry. Anything else in the
+    /// date text (page-like numbers, "0000", non-ASCII digits) is ignored.
+    static let plausibleYears = 1500 ... 2100
+
+    /// Extracts a 4-digit year from free-form date text such as `"2024"`,
+    /// `"2024 Mar"`, `"2024-03-12"` or `"20240312"`. Only ASCII digits
+    /// count; `Character.isNumber` would also accept superscripts, Arabic-
+    /// Indic digits and fractions.
+    static func year(from date: String?) -> String {
         guard let date else { return "" }
-        var digits = ""
-        for character in date {
-            if character.isNumber {
-                digits.append(character)
-                if digits.count == 4 { return digits }
+        func year(in run: String) -> String? {
+            let digits = run.count == 8 ? String(run.prefix(4)) : run
+            guard digits.count == 4, let value = Int(digits), plausibleYears.contains(value) else { return nil }
+            return digits
+        }
+        var run = ""
+        for scalar in date.unicodeScalars {
+            if scalar.isASCII, ("0" ... "9").contains(scalar) {
+                run.unicodeScalars.append(scalar)
             } else {
-                digits = ""
+                if let found = year(in: run) { return found }
+                run = ""
             }
         }
-        return ""
+        return year(in: run) ?? ""
+    }
+
+    static let monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    private static let fullMonthNames = [
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+    ]
+
+    /// 1…12 from "Jul", "July", "Sept.", "07" or "7"; nil for seasons and
+    /// ranges such as "Nov-Dec", which keep their own wording.
+    static func monthNumber(_ text: String) -> Int? {
+        let cleaned = clean(text)
+        if let number = Int(cleaned), (1 ... 12).contains(number) { return number }
+        let key = cleaned.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard key.count >= 3, key.allSatisfy(\.isLetter),
+              let index = fullMonthNames.firstIndex(where: { $0.hasPrefix(key) }) else { return nil }
+        return index + 1
     }
 
     private static func harvardDate(_ date: Date) -> String {
@@ -286,7 +612,7 @@ public enum CitationFormatter {
         return formatter.string(from: date)
     }
 
-    private static func clean(_ value: String) -> String {
+    static func clean(_ value: String) -> String {
         LiteratureNetworking.clean(value)
     }
 
@@ -295,20 +621,311 @@ public enum CitationFormatter {
     private static func cleanTitle(_ value: String) -> String {
         var title = clean(value)
         while title.hasSuffix(".") { title.removeLast() }
-        return title
+        return clean(title)
+    }
+
+    static func displayTitle(_ value: String) -> String {
+        let title = cleanTitle(value)
+        return title.isEmpty ? untitledPlaceholder : title
     }
 
     /// A title ending in "?" or "!" keeps that mark instead of gaining a
     /// second stop.
-    private static func endsWithTerminalPunctuation(_ title: String) -> Bool {
+    static func endsWithTerminalPunctuation(_ title: String) -> Bool {
         title.hasSuffix("?") || title.hasSuffix("!")
     }
 
-    private static func escapeBibTeX(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\\", with: "\\textbackslash{}")
-            .replacingOccurrences(of: "{", with: "\\{")
-            .replacingOccurrences(of: "}", with: "\\}")
+    /// Only web URLs are cited; a reference built by hand could carry any
+    /// scheme.
+    static func webURL(_ url: URL?) -> URL? {
+        guard let url, let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else {
+            return nil
+        }
+        return url
+    }
+
+    /// A bare DOI ("10.1038/370220a0") from the forms PubMed and users
+    /// write: "doi: …", "https://doi.org/…", "http://dx.doi.org/…".
+    static func normalizedDOI(_ value: String?) -> String {
+        guard let value else { return "" }
+        var doi = clean(value)
+        for prefix in ["https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "http://dx.doi.org/", "doi:", "DOI:"] {
+            if doi.lowercased().hasPrefix(prefix.lowercased()) {
+                doi = clean(String(doi.dropFirst(prefix.count)))
+                break
+            }
+        }
+        return doi.hasPrefix("10.") ? doi : ""
+    }
+
+    private static let journalSmallWords: Set<String> = [
+        "a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to",
+        "de", "del", "der", "des", "di", "du", "e", "et", "für", "la", "le", "und", "van", "von", "y", "zu",
+    ]
+
+    /// Removes the disambiguating qualifier PubMed appends to some journal
+    /// titles: "Lancet (London, England)" → "Lancet", "BMJ (Clinical research
+    /// ed.)" → "BMJ". A name that is only a parenthetical is left alone.
+    static func stripJournalQualifier(_ name: String) -> String {
+        let cleaned = clean(name)
+        guard let range = cleaned.range(of: #"\s*\([^()]*\)\s*$"#, options: .regularExpression) else { return cleaned }
+        let stripped = clean(String(cleaned[..<range.lowerBound]))
+        return stripped.isEmpty ? cleaned : stripped
+    }
+
+    /// PubMed catalogues journals in sentence case ("Scientific reports",
+    /// "The Journal of clinical investigation"); citation styles print the
+    /// title in headline case. Words that already carry capitals ("mAbs",
+    /// "BMJ") are left alone.
+    static func journalCase(_ name: String) -> String {
+        var output: [String] = []
+        var sentenceStart = true
+        for word in clean(name).split(separator: " ").map(String.init) {
+            let lowered = word.lowercased()
+            let isAllLowercase = word == lowered
+            let core = lowered.trimmingCharacters(in: .punctuationCharacters)
+            if isAllLowercase, sentenceStart || !journalSmallWords.contains(core),
+               let letter = word.firstIndex(where: \.isLetter) {
+                var capitalised = word
+                capitalised.replaceSubrange(letter ... letter, with: word[letter].uppercased())
+                output.append(capitalised)
+            } else {
+                output.append(word)
+            }
+            sentenceStart = word.hasSuffix(".") || word.hasSuffix(":")
+        }
+        return output.joined(separator: " ")
+    }
+
+    /// A key BibTeX accepts: `pmid` plus the number, or `glkb` with whatever
+    /// ASCII letters and digits a non-PubMed identifier contains.
+    private static func bibtexKey(for reference: LiteratureReference) -> String {
+        if let pmid = PubMed.canonicalPMID(reference.pmid) { return "pmid\(pmid)" }
+        let safe = reference.pmid.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        return safe.isEmpty ? "glkb" : "glkb-\(safe)"
+    }
+
+    /// Escapes every TeX special character in one pass, so no replacement
+    /// can re-match the output of an earlier one.
+    static func escapeBibTeX(_ value: String) -> String {
+        var output = ""
+        output.reserveCapacity(value.count)
+        for character in value {
+            switch character {
+            case "\\": output += "\\textbackslash{}"
+            case "{": output += "\\{"
+            case "}": output += "\\}"
+            case "%", "&", "_", "#", "$": output += "\\\(character)"
+            case "~": output += "\\textasciitilde{}"
+            case "^": output += "\\textasciicircum{}"
+            default: output.append(character)
+            }
+        }
+        return output
+    }
+}
+
+// MARK: - Record
+
+/// Everything a style needs, merged from GLKB's reference and PubMed's
+/// record (which wins wherever it has a value). Empty strings mean unknown.
+struct CitationRecord {
+    let authors: [AuthorName]
+    let title: String
+    let journal: String
+    let journalAbbreviation: String
+    let year: String
+    let month: String
+    let day: String
+    let volume: String
+    let issue: String
+    let pages: PageRange?
+    let doi: String
+    let pmid: String
+    let pubmedURL: URL?
+    let fallbackURL: URL?
+    /// What the page position holds.
+    enum Locator {
+        /// Real pages ("220-3", "243").
+        case pages
+        /// An article number ("e0261090", "e85096"): APA names it as such.
+        case articleNumber
+        /// A bare identifier ("arXiv:2610.03640v1"): never "p." or "Article".
+        case identifier
+    }
+
+    let locator: Locator
+    var pagesAreArticleNumber: Bool { locator == .articleNumber }
+    let kind: ArticleKind
+    let isRetracted: Bool
+    let isPreprint: Bool
+    // Book chapters.
+    let bookTitle: String
+    let editors: [AuthorName]
+    let publisher: String
+    let publisherLocation: String
+    let bookshelfURL: URL?
+    let updated: ArticleDate?
+
+    init(_ reference: LiteratureReference) {
+        let article = reference.article
+        let articleAuthors = article?.authors.compactMap(AuthorName.init(article:)) ?? []
+        authors = articleAuthors.isEmpty ? reference.authors.compactMap(AuthorName.parse) : articleAuthors
+        title = CitationFormatter.displayTitle(article?.title ?? reference.title)
+        journal = CitationFormatter.journalCase(
+            CitationFormatter.stripJournalQualifier(article?.journalTitle ?? reference.journal ?? "")
+        )
+        journalAbbreviation = CitationFormatter.clean(article?.journalAbbreviation ?? "")
+        let articleYear = CitationFormatter.year(from: article?.year)
+        year = articleYear.isEmpty ? CitationFormatter.year(from: reference.date) : articleYear
+        month = CitationFormatter.clean(article?.month ?? "")
+        day = CitationFormatter.clean(article?.day ?? "")
+        volume = CitationFormatter.clean(article?.volume ?? "")
+        issue = CitationFormatter.clean(article?.issue ?? "")
+        if let range = article?.pages.flatMap(PageRange.init(medline:)) {
+            pages = range
+            locator = Self.locator(for: range, fromPagination: true)
+        } else if let range = article?.articleNumber.flatMap(PageRange.init(medline:)) {
+            pages = range
+            locator = Self.locator(for: range, fromPagination: false)
+        } else {
+            pages = nil
+            locator = .pages
+        }
+        doi = CitationFormatter.normalizedDOI(article?.doi)
+        pmid = PubMed.canonicalPMID(reference.pmid) ?? ""
+        pubmedURL = PubMed.url(for: reference.pmid)
+        fallbackURL = CitationFormatter.webURL(reference.url)
+        kind = article?.kind ?? .journalArticle
+        isRetracted = article?.isRetracted ?? false
+        isPreprint = article?.isPreprint ?? false
+        bookTitle = CitationFormatter.clean(article?.bookTitle ?? "")
+        editors = article?.editors.compactMap(AuthorName.init(article:)) ?? []
+        publisher = CitationFormatter.clean(article?.publisher ?? "")
+        publisherLocation = CitationFormatter.clean(article?.publisherLocation ?? "")
+        bookshelfURL = article?.bookshelfURL
+        updated = article?.contributionDate
+    }
+
+    private static func locator(for range: PageRange, fromPagination: Bool) -> Locator {
+        guard !range.isRange else { return .pages }
+        if range.start.lowercased().hasPrefix("arxiv:") { return .identifier }
+        if range.start.range(of: #"^[eE][0-9]+$"#, options: .regularExpression) != nil { return .articleNumber }
+        return fromPagination ? .pages : .articleNumber
+    }
+
+    /// "pp. 220–23" / "p. 243" / "p. e85096" / "arXiv:2610.03640v1" for the
+    /// styles that label pages (MLA, Harvard); `abbreviated` selects the
+    /// Chicago/MLA range form.
+    func labelledPages(abbreviated: Bool) -> String? {
+        guard let pages else { return nil }
+        switch locator {
+        case .identifier: return pages.start
+        case .articleNumber: return "p. \(pages.start)"
+        case .pages: return pages.isRange ? "pp. \(abbreviated ? pages.abbreviated : pages.full)" : "p. \(pages.start)"
+        }
+    }
+
+    /// The day without a leading zero ("2" for PubMed's "02"), as NLM prints it.
+    var dayNumber: String {
+        Int(day).map(String.init) ?? day
+    }
+
+    /// "2026 Sep 14": when a Bookshelf chapter was last revised.
+    var updatedText: String? {
+        guard let updated, let year = updated.year else { return nil }
+        let month = updated.month.flatMap(CitationFormatter.monthNumber).map { CitationFormatter.monthNames[$0 - 1] } ?? updated.month ?? ""
+        let day = updated.day.flatMap { Int($0) }.map(String.init) ?? ""
+        return [year, month, day].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    var titleSentence: String {
+        CitationFormatter.endsWithTerminalPunctuation(title) ? title : "\(title)."
+    }
+
+    var titleStop: String {
+        CitationFormatter.endsWithTerminalPunctuation(title) ? "" : "."
+    }
+
+    /// "370(6486)" or "370".
+    var volumeWithIssue: String {
+        issue.isEmpty ? volume : "\(volume)(\(issue))"
+    }
+
+    /// DOIs may contain "<", ">" and other characters a URL path cannot
+    /// carry unencoded (the SICI DOIs of the 1990s); doi.org resolves the
+    /// encoded form.
+    var doiURL: URL? {
+        guard !doi.isEmpty else { return nil }
+        let path = doi.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? doi
+        return URL(string: "https://doi.org/\(path)")
+    }
+
+    /// The best locator: DOI, else the Bookshelf page, else PubMed, else the
+    /// reference's own web URL.
+    var locatorURL: URL? {
+        doiURL ?? bookshelfURL ?? pubmedURL ?? fallbackURL
+    }
+
+    var monthNumber: Int? {
+        CitationFormatter.monthNumber(month)
+    }
+
+    /// "Jul" for both "Jul" and "07"; seasons and ranges as given.
+    var monthName: String {
+        monthNumber.map { CitationFormatter.monthNames[$0 - 1] } ?? month
+    }
+
+    /// BibTeX's month macro ("jul"), nil for seasons and ranges.
+    var monthMacro: String? {
+        monthNumber.map { CitationFormatter.monthNames[$0 - 1].lowercased() }
+    }
+}
+
+/// A MEDLINE page string, split and expanded: "220-3" is 220–223.
+struct PageRange: Equatable {
+    let start: String
+    /// The expanded end page, nil for a single page or article number.
+    let end: String?
+    /// As PubMed gives it, which is also how Vancouver prints it.
+    let medline: String
+
+    init?(medline raw: String) {
+        // "220-3; discussion 230-5" cites only the article itself.
+        let text = CitationFormatter.clean(String(raw.split(separator: ";").first ?? ""))
+        guard !text.isEmpty else { return nil }
+        let parts = text.split(separator: "-", maxSplits: 1).map { CitationFormatter.clean(String($0)) }
+        guard let first = parts.first, !first.isEmpty else { return nil }
+        start = first
+        var last = parts.count > 1 ? parts[1] : ""
+        if !last.isEmpty, first.allSatisfy(\.isNumber), last.allSatisfy(\.isNumber), last.count < first.count {
+            last = String(first.prefix(first.count - last.count)) + last
+        }
+        end = last.isEmpty ? nil : last
+        medline = text
+    }
+
+    var isRange: Bool { end != nil }
+
+    /// "220–223".
+    var full: String {
+        end.map { "\(start)\u{2013}\($0)" } ?? start
+    }
+
+    /// Chicago/MLA abbreviation (CMOS 9.61): "220–23", "101–8", "498–532",
+    /// "1087–89"; ranges under 100 or starting on a hundred are left whole.
+    var abbreviated: String {
+        guard let end else { return start }
+        guard let first = Int(start), let last = Int(end), last > first, start.count == end.count else { return full }
+        if first < 100 || first % 100 == 0 { return full }
+        let shared = zip(start, end).prefix(while: { $0 == $1 }).count
+        var suffix = String(end.dropFirst(shared))
+        if (1 ... 9).contains(first % 100) {
+            if suffix.isEmpty { suffix = String(end.suffix(1)) }
+        } else if suffix.count < 2 {
+            suffix = String(end.suffix(2))
+        }
+        return "\(start)\u{2013}\(suffix)"
     }
 }
 
@@ -324,30 +941,39 @@ struct AuthorName: Equatable {
     var suffix: String?
     /// A group author ("WHO Study Group"), printed verbatim in every style.
     var isCorporate: Bool
+    /// Initials as PubMed records them ("TH" for "Thi Hong Ha"); derived
+    /// from the given names when absent.
+    var initials: String? = nil
 
     /// Accepts "Caelles C", "Caelles CA", "C Caelles", "C A Caelles",
     /// "Caelles, Carme", "Carme Caelles", "J van der Berg", "Smith J Jr",
-    /// and group names. Returns nil for an empty string.
+    /// "Smith III", "Smith, Jr." and group names. Returns nil for an empty
+    /// string.
+    ///
+    /// Two shapes stay ambiguous and follow the PubMed/GLKB convention:
+    /// "M Garcia Lopez" is a compound surname (not a given name "Garcia"),
+    /// and "Ivanov IV" has the initials I. V. (not a suffix).
     static func parse(_ raw: String) -> AuthorName? {
         let text = LiteratureNetworking.clean(raw)
-        guard !text.isEmpty else { return nil }
+        guard !text.isEmpty, !isPlaceholder(text) else { return nil }
         if looksCorporate(text) {
             return AuthorName(surname: text, givenNames: [], suffix: nil, isCorporate: true)
         }
 
         if let comma = text.firstIndex(of: ",") {
-            // "Surname, Given Names[, Suffix]"
+            // "Surname, Given Names[, Suffix]" — the surname is already
+            // separated, so the suffix may be the only thing after the comma.
             let surname = text[..<comma].trimmingCharacters(in: .whitespaces)
             var given = text[text.index(after: comma)...]
                 .split(whereSeparator: { $0 == "," || $0.isWhitespace })
                 .map(String.init)
-            let suffix = takeSuffix(&given)
+            let suffix = takeSuffix(&given, minimumRemaining: 0)
             guard !surname.isEmpty else { return nil }
             return AuthorName(surname: surname, givenNames: given, suffix: suffix, isCorporate: false)
         }
 
         var tokens = text.split(separator: " ").map(String.init)
-        let suffix = takeSuffix(&tokens)
+        let suffix = takeSuffix(&tokens, minimumRemaining: 1)
         guard let first = tokens.first else { return nil }
         if tokens.count == 1 {
             return AuthorName(surname: first, givenNames: [], suffix: suffix, isCorporate: false)
@@ -450,12 +1076,16 @@ struct AuthorName: Equatable {
 
     /// "C. A." / "J.-P."
     private var spacedInitials: String {
-        givenNames.map { Self.spaced(Self.initialLetters(of: $0)) }.joined(separator: " ")
+        if let initials {
+            return initials.filter(\.isLetter).map { "\($0)." }.joined(separator: " ")
+        }
+        return givenNames.map { Self.spaced(Self.initialLetters(of: $0)) }.joined(separator: " ")
     }
 
     /// "CA" / "JP"
     private var compactInitials: String {
-        givenNames.flatMap { Self.initialLetters(of: $0).flatMap { $0 } }.joined()
+        if let initials { return initials.filter(\.isLetter) }
+        return givenNames.flatMap { Self.initialLetters(of: $0).flatMap { $0 } }.joined()
     }
 
     /// Initial letters per hyphenated part: "Jean-Pierre" → [["J"], ["P"]],
@@ -488,21 +1118,39 @@ struct AuthorName: Equatable {
         "bin", "ibn", "al", "el", "y", "e", "of",
     ]
 
+    /// "van", and capitalised forms of two or more letters ("Van", "De"):
+    /// single letters stay initials ("J Y Lee").
     private static func isParticle(_ token: String) -> Bool {
-        token == token.lowercased() && particles.contains(token)
+        let lower = token.lowercased()
+        guard particles.contains(lower) else { return false }
+        if token == lower { return true }
+        return token.count >= 2 && token == lower.prefix(1).uppercased() + lower.dropFirst()
     }
 
     private static let suffixes: Set<String> = ["jr", "sr", "ii", "iii", "iv", "2nd", "3rd"]
 
-    /// Removes a trailing generational suffix and returns it.
-    private static func takeSuffix(_ tokens: inout [String]) -> String? {
-        guard tokens.count > 1, let last = tokens.last else { return nil }
+    /// Strings that stand in for authors rather than naming one: PubMed's
+    /// "[No authors listed]" and a trailing "et al" in a truncated list.
+    static func isPlaceholder(_ text: String) -> Bool {
+        let key = text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[].,;: "))
+        return key == "no authors listed" || key == "et al" || key == "anonymous author" || key.isEmpty
+    }
+
+    private static func isSuffixToken(_ token: String) -> Bool {
+        suffixes.contains(token.trimmingCharacters(in: CharacterSet(charactersIn: ".,")).lowercased())
+    }
+
+    /// Removes a trailing generational suffix and returns it. At least
+    /// `minimumRemaining` tokens must stay (the surname in a plain name;
+    /// nothing after a comma, where the surname is already separated).
+    private static func takeSuffix(_ tokens: inout [String], minimumRemaining: Int) -> String? {
+        guard tokens.count > minimumRemaining, let last = tokens.last else { return nil }
         let bare = last.trimmingCharacters(in: CharacterSet(charactersIn: ".,"))
         let key = bare.lowercased()
         guard suffixes.contains(key) else { return nil }
-        // "II"/"III"/"IV" could be initials in a two-token name; require a
-        // given name as well before treating them as a suffix.
-        if key.hasPrefix("i"), tokens.count < 3 { return nil }
+        // "II"/"IV" are also plausible initials ("Ivanov IV"); only treat
+        // them as a suffix once a given name is present as well.
+        if ["ii", "iv"].contains(key), tokens.count < minimumRemaining + 2 { return nil }
         tokens.removeLast()
         return bare
     }
@@ -516,13 +1164,57 @@ struct AuthorName: Equatable {
         "registry", "task force",
     ]
 
-    /// Group authors contain digits or an organisational word.
+    /// Group authors contain digits or an organisational word. A trailing
+    /// generational suffix ("2nd") is not a digit of a group name, and a
+    /// marker word next to an initial ("Study A", "A Study") is a person's
+    /// surname, as is a marker word on its own.
     private static func looksCorporate(_ text: String) -> Bool {
-        if text.contains(where: \.isNumber) { return true }
-        let lower = text.lowercased()
-        let words = Set(lower.split(whereSeparator: { !$0.isLetter && $0 != "-" }).map(String.init))
-        return corporateMarkers.contains { marker in
-            marker.contains(" ") ? lower.contains(marker) : words.contains(marker)
+        var words = text.split(whereSeparator: { $0.isWhitespace || $0 == "," }).map(String.init)
+        while words.count > 1, let last = words.last, isSuffixToken(last) { words.removeLast() }
+        if words.contains(where: { $0.contains(where: \.isNumber) }) { return true }
+
+        let lowered = words.map { word in String(word.lowercased().filter { $0.isLetter || $0 == "-" }) }
+        let joined = lowered.joined(separator: " ")
+        for marker in corporateMarkers where marker.contains(" ") {
+            if joined.contains(marker) { return true }
         }
+        guard lowered.contains(where: corporateMarkers.contains) else { return false }
+        switch lowered.count {
+        case 1: return false
+        case 2: return !words.contains(where: isInitialsToken)
+        default: return true
+        }
+    }
+}
+
+// A struct with an initializer in its body loses the memberwise one `parse`
+// relies on; the PubMed initializer therefore lives in an extension.
+extension AuthorName {
+    /// From PubMed's structured name parts. Returns nil for an author
+    /// record with neither a surname nor a group name.
+    init?(article author: ArticleAuthor) {
+        if let collective = author.collectiveName.map(LiteratureNetworking.clean), !collective.isEmpty {
+            self.init(surname: collective, givenNames: [], suffix: nil, isCorporate: true)
+            return
+        }
+        guard var surname = author.lastName.map(LiteratureNetworking.clean), !surname.isEmpty else { return nil }
+        var given = LiteratureNetworking.clean(author.foreName ?? "").split(separator: " ").map(String.init)
+        var initials = author.initials.map(LiteratureNetworking.clean).flatMap { $0.isEmpty ? nil : $0 }
+        var suffix = author.suffix.map(LiteratureNetworking.clean).flatMap { $0.isEmpty ? nil : $0 }
+        // A PubMed data error seen in the wild: LastName "Jr", ForeName
+        // "Fedor Čiampor". The real surname is the forename's last token.
+        if suffix == nil, Self.isSuffixToken(surname), given.count >= 2 {
+            suffix = surname
+            surname = given.removeLast()
+            initials = nil
+        }
+        if given.isEmpty, let initials { given = [initials] }
+        self.init(
+            surname: surname,
+            givenNames: given,
+            suffix: suffix,
+            isCorporate: false,
+            initials: initials
+        )
     }
 }

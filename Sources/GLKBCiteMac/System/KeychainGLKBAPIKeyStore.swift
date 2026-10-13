@@ -1,4 +1,5 @@
 import Foundation
+import GLKBCiteCore
 import Security
 
 public enum GLKBAPIKeyStoreError: Error, LocalizedError {
@@ -9,7 +10,7 @@ public enum GLKBAPIKeyStoreError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .invalidKey:
-            return "Enter a GLKB API key beginning with glkb_."
+            return "Enter a GLKB API key beginning with glkb_ (letters, digits, - and _ only, on one line)."
         case .invalidStoredValue:
             return "The saved GLKB API key could not be read. Save a new glkb_ key in Settings to replace it."
         case let .keychainFailure(status):
@@ -28,6 +29,10 @@ public protocol GLKBAPIKeyStoring: Sendable {
 
 /// Stores only the user-provided GLKB credential. The value is never exposed in
 /// errors, logs, defaults, diagnostics, or the application bundle.
+///
+/// The item lives in the login keychain (the data-protection keychain would
+/// orphan keys saved by earlier builds). Items are created with
+/// "after first unlock, this device only" accessibility and are never synced.
 public struct KeychainGLKBAPIKeyStore: GLKBAPIKeyStoring, Sendable {
     public let service: String
     public let account: String
@@ -62,11 +67,8 @@ public struct KeychainGLKBAPIKeyStore: GLKBAPIKeyStoring, Sendable {
     }
 
     public func saveAPIKey(_ keyValue: String) throws {
-        let normalizedKey = keyValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedKey.hasPrefix("glkb_"), normalizedKey.count > "glkb_".count else {
-            throw GLKBAPIKeyStoreError.invalidKey
-        }
-        guard let data = normalizedKey.data(using: .utf8) else {
+        guard let normalizedKey = GLKBAPIKeyFormat.normalize(keyValue),
+              let data = normalizedKey.data(using: .utf8) else {
             throw GLKBAPIKeyStoreError.invalidKey
         }
 
@@ -82,12 +84,17 @@ public struct KeychainGLKBAPIKeyStore: GLKBAPIKeyStoring, Sendable {
         case errSecSuccess:
             return
         case errSecItemNotFound:
-            var newItem = baseQuery
-            newItem.merge(updateAttributes) { _, new in new }
-            let addStatus = SecItemAdd(newItem as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw GLKBAPIKeyStoreError.keychainFailure(addStatus)
+            try add(data)
+        case errSecAuthFailed, errSecInteractionNotAllowed:
+            // The existing item's access list no longer matches this binary
+            // (typical after a rebuild) or the user denied the prompt once.
+            // Replacing the item is the only way to recover without Keychain
+            // Access; `add` then creates it with this binary's access.
+            let deleteStatus = SecItemDelete(baseQuery as CFDictionary)
+            guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+                throw GLKBAPIKeyStoreError.keychainFailure(updateStatus)
             }
+            try add(data)
         default:
             throw GLKBAPIKeyStoreError.keychainFailure(updateStatus)
         }
@@ -97,6 +104,18 @@ public struct KeychainGLKBAPIKeyStore: GLKBAPIKeyStoring, Sendable {
         let status = SecItemDelete(baseQuery as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw GLKBAPIKeyStoreError.keychainFailure(status)
+        }
+    }
+
+    private func add(_ data: Data) throws {
+        var newItem = baseQuery
+        newItem[key(kSecValueData)] = data
+        newItem[key(kSecAttrAccessible)] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        newItem[key(kSecAttrSynchronizable)] = kCFBooleanFalse
+        newItem[key(kSecAttrLabel)] = "GLKB Cite API Key"
+        let addStatus = SecItemAdd(newItem as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw GLKBAPIKeyStoreError.keychainFailure(addStatus)
         }
     }
 

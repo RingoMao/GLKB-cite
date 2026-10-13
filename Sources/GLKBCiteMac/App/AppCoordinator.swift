@@ -22,6 +22,16 @@ public enum FailureKind: Equatable, Sendable {
     case other
 }
 
+/// What the app knows about the stored GLKB key. `unreadable` is distinct
+/// from `missing`: a key may exist that the Keychain refused to hand over
+/// (locked keychain, denied access prompt), and the UI should say so rather
+/// than pretend no key was saved.
+public enum CredentialStatus: Equatable, Sendable {
+    case missing
+    case stored
+    case unreadable(String)
+}
+
 @MainActor
 public final class AppCoordinator: ObservableObject {
     public static let shared = AppCoordinator()
@@ -34,14 +44,29 @@ public final class AppCoordinator: ObservableObject {
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var failureKind: FailureKind?
     @Published public private(set) var hasStoredAPIKey = false
-    /// The stored key masked for display (prefix and last four characters),
-    /// cached so views never hit the Keychain per render.
+    @Published public private(set) var credentialStatus: CredentialStatus = .missing
+    /// Placeholder shown in the key field when a key is stored. Reveals only
+    /// the prefix, never any part of the secret.
     @Published public private(set) var maskedStoredAPIKey: String?
     @Published public private(set) var citeReference: LiteratureReference?
+    /// Whether the Cite modal's citations carry PubMed's volume, pages and
+    /// DOI yet, or why they do not.
+    @Published public private(set) var citeDetailStatus: CiteDetailStatus = .idle
     @Published public private(set) var toastMessage: String?
+    /// Whether the results panel is on screen. Cards drop transient hover
+    /// state when it goes away, so a hover does not stick until the next show.
+    @Published public private(set) var isResultPanelVisible = false
+    /// The tallest the results panel may grow on the display it is shown on.
+    @Published public private(set) var resultPanelMaxHeight: CGFloat = AppCoordinator.preferredResultPanelHeight
     @Published public private(set) var launchAtLoginStatus: LaunchAtLoginStatus = .unavailable
     @Published public private(set) var shortcutRegistrationReport = GlobalHotKeyRegistrationReport()
     @Published public private(set) var shortcutStatusMessage: String?
+    /// Set while setup is complete but Accessibility trust is missing (revoked
+    /// by the user, or invalidated by macOS after the binary changed).
+    @Published public private(set) var accessibilityWarning: String?
+    /// Mirrors `UpdateController.pendingUpdateVersion` so menu views that
+    /// observe only the coordinator re-render.
+    @Published public private(set) var pendingUpdateVersion: String?
 
     public let settings: AppSettings
     public let updateController: UpdateController
@@ -67,14 +92,28 @@ public final class AppCoordinator: ObservableObject {
     private var toastTask: Task<Void, Never>?
     private var automaticCandidate: AutomaticSelectionCandidate?
     private var candidateExpiryTask: Task<Void, Never>?
+    /// The one capture in flight, whether started by the hot key, the menu,
+    /// or a badge click. Starting a new one cancels it.
     private var selectionCaptureTask: Task<Void, Never>?
     private var queryTask: Task<Void, Never>?
     private var activeQueryID: UUID?
     private var activeQuery: LiteratureQuery?
     private var lastQuery: LiteratureQuery?
     private var hasStarted = false
+    private var activationObserver: NSObjectProtocol?
+    private var cancellables = Set<AnyCancellable>()
+    /// Built once per credential and reused across queries so the URLSession
+    /// (and its connections) survive between searches.
+    private var cachedBackend: (credentialScope: String, backend: any LiteratureBackend)?
+    private let articleService = PubMedArticleService()
+    /// PubMed records by PMID, for the life of the process.
+    private var articleMetadataCache: [String: ArticleMetadata] = [:]
+    private var articleFetchTask: Task<Void, Never>?
+    private var credentialScope = "missing"
 
-    public init(
+    /// Non-singleton instances exist for tests. They must not touch the panel
+    /// controllers (which retain the coordinator through their hosting views).
+    init(
         settings: AppSettings? = nil,
         permissionManager: (any AccessibilityPermissionManaging)? = nil,
         selectionProvider: (any AsyncSystemSelectionCapturing)? = nil,
@@ -114,6 +153,9 @@ public final class AppCoordinator: ObservableObject {
             // because clicking that badge is what runs it.
             provisionalBadgeEnabled: { resolvedSettings.compatibilityCaptureEnabled }
         )
+        self.updateController.$pendingUpdateVersion
+            .sink { [weak self] version in self?.pendingUpdateVersion = version }
+            .store(in: &cancellables)
         refreshCredentialStatus()
         refreshLaunchAtLoginStatus()
     }
@@ -149,17 +191,38 @@ public final class AppCoordinator: ObservableObject {
             CaptureDiagnostics.log("start: accessibility not trusted, prompting")
             _ = permissionManager.checkTrust(promptIfNeeded: true)
         }
+        refreshAccessibilityStatus()
+        // Trust can also disappear while running; re-check whenever the user
+        // switches apps (cheap) so the menu can say so instead of the badge
+        // silently never appearing again.
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshAccessibilityStatus() }
+        }
     }
 
     public func stop() {
         invalidateCurrentQuery()
         selectionCaptureTask?.cancel()
+        selectionCaptureTask = nil
         candidateExpiryTask?.cancel()
+        articleFetchTask?.cancel()
+        articleFetchTask = nil
         automaticSelectionMonitor.stop()
         automaticCandidate = nil
         hotKeyManager.unregister()
         servicesProvider.uninstall()
         badgePanelController.dismiss()
+        if let activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+        }
+        activationObserver = nil
+        // A Copy fallback interrupted by termination must not leave the
+        // user's clipboard holding the selection instead of their content.
+        selectionProvider.restorePendingClipboardIfNeeded()
         hasStarted = false
         Task { await glkbCache.removeAll() }
     }
@@ -171,12 +234,15 @@ public final class AppCoordinator: ObservableObject {
         selectionCaptureTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let captured = try await selectionProvider.captureSelection(allowCompatibility: true)
+                let captured = try await selectionProvider.captureSelection(
+                    SelectionCaptureOptions(allowCompatibility: true, descendantSearch: .thorough)
+                )
                 try Task.checkCancellation()
                 dispatch(systemSelection: captured)
             } catch is CancellationError {
                 return
             } catch {
+                guard !Task.isCancelled else { return }
                 handleSelectionCaptureFailure(error)
             }
         }
@@ -187,32 +253,40 @@ public final class AppCoordinator: ObservableObject {
         automaticCandidate = nil
         candidateExpiryTask?.cancel()
         badgePanelController.dismiss()
-        Task { [weak self] in
+        // Tracked like every other capture, so a hot key pressed while this is
+        // in flight supersedes it instead of racing it for the panel.
+        selectionCaptureTask?.cancel()
+        selectionCaptureTask = Task { [weak self] in
             guard let self else { return }
-            switch candidate {
-            case .captured(let selection):
-                guard await selectionProvider.isStillValid(selection) else {
-                    handleSelectionCaptureFailure(SelectionCaptureError.staleSelection)
-                    return
-                }
-                dispatch(systemSelection: selection)
-            case .provisional(let source):
-                // The badge click is the explicit request; only now may the
-                // guarded temporary-Copy fallback read the selection — and
-                // only from the app the gesture happened in.
-                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == source.processIdentifier else {
-                    handleSelectionCaptureFailure(SelectionCaptureError.staleSelection)
-                    return
-                }
-                do {
+            do {
+                switch candidate {
+                case .captured(let selection):
+                    let stillValid = await selectionProvider.isStillValid(selection)
+                    try Task.checkCancellation()
+                    guard stillValid else { throw SelectionCaptureError.staleSelection }
+                    dispatch(systemSelection: selection)
+                case .provisional(let source):
+                    // The badge click is the explicit request; only now may the
+                    // guarded temporary-Copy fallback read the selection — and
+                    // only from the app the gesture happened in.
+                    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == source.processIdentifier else {
+                        throw SelectionCaptureError.staleSelection
+                    }
                     let captured = try await selectionProvider.captureSelection(
-                        allowCompatibility: true,
-                        expectedProcess: source.processIdentifier
+                        SelectionCaptureOptions(
+                            allowCompatibility: true,
+                            expectedProcess: source.processIdentifier,
+                            descendantSearch: .thorough
+                        )
                     )
+                    try Task.checkCancellation()
                     dispatch(systemSelection: captured)
-                } catch {
-                    handleSelectionCaptureFailure(error)
                 }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                handleSelectionCaptureFailure(error)
             }
         }
     }
@@ -230,6 +304,13 @@ public final class AppCoordinator: ObservableObject {
                 string: "Third-party notices",
                 attributes: [.font: NSFont.systemFont(ofSize: 11), .link: noticesURL]
             ))
+            if let licenseURL = Bundle.main.url(forResource: "LICENSE", withExtension: "txt") {
+                credits.append(NSAttributedString(string: "  ·  ", attributes: [.font: NSFont.systemFont(ofSize: 11)]))
+                credits.append(NSAttributedString(
+                    string: "License",
+                    attributes: [.font: NSFont.systemFont(ofSize: 11), .link: licenseURL]
+                ))
+            }
             options[.credits] = credits
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -239,13 +320,62 @@ public final class AppCoordinator: ObservableObject {
     // MARK: Cite modal and toast
 
     public func presentCite(_ reference: LiteratureReference) {
-        citeReference = reference
+        var presented = reference
+        if let cached = articleMetadataCache[reference.pmid] {
+            presented.article = cached
+            citeDetailStatus = .fromPubMed
+        } else {
+            citeDetailStatus = .loading
+        }
+        citeReference = presented
         citePanelController.show(over: resultPanelController.frame)
+        if presented.article == nil {
+            fetchArticleDetails(for: reference.pmid)
+        }
     }
 
     public func dismissCite() {
+        articleFetchTask?.cancel()
+        articleFetchTask = nil
+        citeDetailStatus = .idle
         citeReference = nil
         citePanelController.hide()
+    }
+
+    /// Fetches PubMed's record for the cited reference and, in the same
+    /// request, for every other reference on screen, so later Cite clicks on
+    /// this result are instant. Only PMIDs leave the Mac.
+    private func fetchArticleDetails(for pmid: String) {
+        articleFetchTask?.cancel()
+        var pmids = [pmid]
+        for reference in result?.references ?? []
+        where reference.pmid != pmid && articleMetadataCache[reference.pmid] == nil {
+            pmids.append(reference.pmid)
+        }
+        let service = articleService
+        articleFetchTask = Task { @MainActor [weak self] in
+            let outcome: Result<[String: ArticleMetadata], Error>
+            do {
+                outcome = .success(try await service.articles(for: pmids))
+            } catch {
+                outcome = .failure(error)
+            }
+            guard let self, !Task.isCancelled else { return }
+            switch outcome {
+            case .success(let articles):
+                articleMetadataCache.merge(articles) { _, fetched in fetched }
+                guard citeReference?.pmid == pmid else { return }
+                if let article = articles[pmid] {
+                    citeReference?.article = article
+                    citeDetailStatus = .fromPubMed
+                } else {
+                    citeDetailStatus = .unavailable("PubMed has no record for PMID \(pmid).")
+                }
+            case .failure(let error):
+                guard citeReference?.pmid == pmid else { return }
+                citeDetailStatus = .unavailable(error.localizedDescription)
+            }
+        }
     }
 
     public func showToast(_ message: String) {
@@ -278,34 +408,53 @@ public final class AppCoordinator: ObservableObject {
         resultPanelController.hide()
     }
 
+    static let preferredResultPanelHeight: CGFloat = 560
+    static let minimumResultPanelHeight: CGFloat = 180
+
+    func setResultPanelVisible(_ visible: Bool) {
+        if isResultPanelVisible != visible { isResultPanelVisible = visible }
+    }
+
+    /// Clamps the panel's height to the usable height of its display, so a
+    /// small or mirrored screen never pushes the header off the top.
+    func limitResultPanelHeight(toAvailable available: CGFloat) {
+        let limit = max(Self.minimumResultPanelHeight, min(Self.preferredResultPanelHeight, available))
+        if resultPanelMaxHeight != limit { resultPanelMaxHeight = limit }
+    }
+
     public func showSettings() {
         settingsWindowController.show()
     }
 
     public func showOnboarding() { onboardingWindowController.show() }
 
+    /// Called when the setup wizard shows its privacy step, where both consent
+    /// controls are visible: pre-selects the recommended configuration for a
+    /// user who has never chosen, and leaves any earlier choice alone.
+    public func prepareOnboardingPrivacyStep() {
+        settings.applyRecommendedPrivacyDefaultsIfUnset()
+    }
+
     /// Returns false when setup cannot finish yet (no Accessibility trust or
     /// no stored key) so the caller can say so instead of failing silently.
+    /// Finishing setup changes no privacy setting: the wizard's privacy step
+    /// shows the controls and whatever they say stands.
     @discardableResult
     public func completeOnboarding() -> Bool {
         refreshCredentialStatus()
         guard permissionManager.isTrusted, hasStoredAPIKey else { return false }
-        // Apply the recommended defaults only on the first completion so a
-        // later pass through Setup never silently re-enables features the
-        // user explicitly turned off.
-        if !settings.hasCompletedOnboarding {
-            settings.compatibilityCaptureEnabled = true
-            settings.automaticSelectionEnabled = true
-            settings.hasCompletedOnboarding = true
-        }
+        settings.hasCompletedOnboarding = true
         synchronizeAutomaticSelectionMonitor()
+        refreshAccessibilityStatus()
         onboardingWindowController.close()
         return true
     }
 
     @discardableResult
     public func requestAccessibilityPermission() -> Bool {
-        permissionManager.checkTrust(promptIfNeeded: true)
+        let trusted = permissionManager.checkTrust(promptIfNeeded: true)
+        refreshAccessibilityStatus()
+        return trusted
     }
 
     public func openAccessibilitySettings() { permissionManager.openAccessibilitySettings() }
@@ -322,23 +471,32 @@ public final class AppCoordinator: ObservableObject {
     }
 
     public func refreshCredentialStatus() {
-        let key = (try? keyStore.loadAPIKey()) ?? nil
+        let key: String?
+        do {
+            key = try keyStore.loadAPIKey()
+            credentialStatus = key == nil ? .missing : .stored
+        } catch {
+            key = nil
+            credentialStatus = .unreadable(error.localizedDescription)
+        }
         hasStoredAPIKey = key != nil
-        if let key, key.count > 9 {
-            let prefix = key.hasPrefix("glkb_") ? "glkb_" : ""
-            maskedStoredAPIKey = prefix + String(repeating: "\u{2022}", count: 12) + String(key.suffix(4))
-        } else {
-            maskedStoredAPIKey = nil
+        maskedStoredAPIKey = key == nil ? nil : "glkb_•••••••••••••••• (saved)"
+        let scope = Self.credentialScope(for: key)
+        if scope != credentialScope {
+            credentialScope = scope
+            cachedBackend = nil
         }
     }
 
     public func setAutomaticSelectionEnabled(_ enabled: Bool) {
-        settings.automaticSelectionEnabled = enabled
-        // The monitor only runs after setup; if the user turned the badge on
-        // before finishing, bring setup back rather than silently doing nothing.
-        if enabled, !settings.hasCompletedOnboarding {
-            onboardingWindowController.show()
+        // Until setup is complete the monitor cannot run, so do not persist a
+        // choice that would show as an inert checked item; bring setup back
+        // (its privacy step has the same control) instead.
+        guard settings.hasCompletedOnboarding else {
+            if enabled { onboardingWindowController.show() }
+            return
         }
+        settings.automaticSelectionEnabled = enabled
         synchronizeAutomaticSelectionMonitor()
     }
 
@@ -428,51 +586,45 @@ public final class AppCoordinator: ObservableObject {
         progressContent = nil
         resultPanelController.show(anchor: anchor)
 
-        do {
-            let backend = try makeBackend()
-            queryTask = Task { [weak self] in
-                guard let self else { return }
-                do {
-                    var receivedCompletion = false
-                    for try await event in backend.query(query) {
-                        try Task.checkCancellation()
-                        guard activeQueryID == queryID else { return }
-                        switch event {
-                        case let .progress(step, content):
-                            progressStep = step
-                            progressContent = content
-                        case .completed(let completedResult):
-                            receivedCompletion = true
-                            result = completedResult
-                            phase = .completed
-                            progressStep = ""
-                            progressContent = nil
-                        }
-                    }
+        let backend = makeBackend()
+        queryTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                var receivedCompletion = false
+                for try await event in backend.query(query) {
+                    try Task.checkCancellation()
                     guard activeQueryID == queryID else { return }
-                    activeQueryID = nil
-                    activeQuery = nil
-                    queryTask = nil
-                    if !receivedCompletion { showError("GLKB finished without usable citations.") }
-                } catch {
-                    guard activeQueryID == queryID else { return }
-                    activeQueryID = nil
-                    activeQuery = nil
-                    queryTask = nil
-                    let cancelled = error is CancellationError || (error as? LiteratureError) == .cancelled
-                    if cancelled {
-                        phase = .failed
-                        errorMessage = LiteratureError.cancelled.localizedDescription
-                        failureKind = .other
-                    } else {
-                        showError(friendlyMessage(for: error), kind: classify(error))
+                    switch event {
+                    case let .progress(step, content):
+                        progressStep = step
+                        progressContent = content
+                    case .completed(let completedResult):
+                        receivedCompletion = true
+                        result = completedResult
+                        phase = .completed
+                        progressStep = ""
+                        progressContent = nil
                     }
                 }
+                guard activeQueryID == queryID else { return }
+                activeQueryID = nil
+                activeQuery = nil
+                queryTask = nil
+                if !receivedCompletion { showError("GLKB finished without usable citations.") }
+            } catch {
+                guard activeQueryID == queryID else { return }
+                activeQueryID = nil
+                activeQuery = nil
+                queryTask = nil
+                let cancelled = error is CancellationError || (error as? LiteratureError) == .cancelled
+                if cancelled {
+                    phase = .failed
+                    errorMessage = LiteratureError.cancelled.localizedDescription
+                    failureKind = .other
+                } else {
+                    showError(friendlyMessage(for: error), kind: classify(error))
+                }
             }
-        } catch {
-            activeQueryID = nil
-            activeQuery = nil
-            showError(friendlyMessage(for: error), kind: classify(error))
         }
     }
 
@@ -483,20 +635,26 @@ public final class AppCoordinator: ObservableObject {
         queryTask = nil
     }
 
-    private func makeBackend() throws -> any LiteratureBackend {
-        let storedKey = try keyStore.loadAPIKey()
+    /// One backend (and URLSession) per credential. The key itself is read
+    /// by the backend at request time, off the main actor.
+    private func makeBackend() -> any LiteratureBackend {
+        if let cachedBackend, cachedBackend.credentialScope == credentialScope {
+            return cachedBackend.backend
+        }
         let keyStore = self.keyStore
         let backend = GLKBBackend {
             guard let key = try keyStore.loadAPIKey() else { throw LiteratureError.missingCredential }
             return key
         }
-        return CachingLiteratureBackend(
+        let caching = CachingLiteratureBackend(
             backend: backend,
             cache: glkbCache,
             inFlight: glkbInFlight,
             endpointScope: GLKBBackend.defaultEndpoint.absoluteString,
-            credentialScope: credentialScope(for: storedKey)
+            credentialScope: credentialScope
         )
+        cachedBackend = (credentialScope, caching)
+        return caching
     }
 
     private func synchronizeAutomaticSelectionMonitor() {
@@ -509,6 +667,20 @@ public final class AppCoordinator: ObservableObject {
             handler: { [weak self] event in self?.presentAutomaticCandidate(event) },
             invalidationHandler: { [weak self] in self?.invalidateAutomaticCandidate() }
         )
+    }
+
+    private func refreshAccessibilityStatus() {
+        guard settings.hasCompletedOnboarding else {
+            accessibilityWarning = nil
+            return
+        }
+        if permissionManager.isTrusted {
+            if accessibilityWarning != nil { CaptureDiagnostics.log("accessibility: trust restored") }
+            accessibilityWarning = nil
+        } else if accessibilityWarning == nil {
+            CaptureDiagnostics.log("accessibility: trust lost while running")
+            accessibilityWarning = "GLKB Cite lost Accessibility access. Re-enable it in System Settings › Privacy & Security › Accessibility."
+        }
     }
 
     private func presentAutomaticCandidate(_ event: AutomaticSelectionEvent) {
@@ -543,7 +715,7 @@ public final class AppCoordinator: ObservableObject {
             switch captureError {
             case .accessibilityPermissionRequired, .accessibilityFailure:
                 return .accessibility
-            case .emptySelection, .staleSelection, .secureField:
+            case .emptySelection, .staleSelection, .secureField, .selectionTooLong:
                 return .invalidSelection
             case .selectionUnavailable, .focusedElementUnavailable:
                 return .other
@@ -569,12 +741,13 @@ public final class AppCoordinator: ObservableObject {
         return switch literatureError {
         case .requestFailed(statusCode: 401, _), .requestFailed(statusCode: 403, _):
             "GLKB rejected this API key. Replace it with an active glkb_ key in Settings."
-        case .requestFailed(statusCode: 429, _):
-            "GLKB declined this request because usage or rate limits were reached. Check the account before retrying."
+        case .requestFailed(statusCode: 429, let message):
+            "GLKB declined this request because usage or rate limits were reached."
+                + (message.map { " \($0)" } ?? " Check the account before retrying.")
         case .requestFailed(statusCode: 422, let message):
             message.map { "GLKB rejected the selected sentence: \($0)" }
                 ?? "GLKB rejected the selected sentence."
-        case .requestFailed(statusCode: 502, _):
+        case .requestFailed(statusCode: 502, _), .requestFailed(statusCode: 503, _):
             "The GLKB citation service is temporarily unavailable. Try once more in a moment."
         case .requestFailed(statusCode: 504, _):
             "The GLKB citation search exceeded its server timeout. Try once more."
@@ -594,6 +767,7 @@ public final class AppCoordinator: ObservableObject {
         failureKind: FailureKind? = nil,
         progressStep: String = "",
         citeReference: LiteratureReference? = nil,
+        citeDetailStatus: CiteDetailStatus = .idle,
         toastMessage: String? = nil
     ) {
         self.phase = phase
@@ -603,14 +777,25 @@ public final class AppCoordinator: ObservableObject {
         self.failureKind = failureKind
         self.progressStep = progressStep
         self.citeReference = citeReference
+        self.citeDetailStatus = citeDetailStatus
         self.toastMessage = toastMessage
     }
 #endif
 
-    private func credentialScope(for key: String?) -> String {
+    private static func credentialScope(for key: String?) -> String {
         guard let key else { return "missing" }
         return SHA256.hash(data: Data(key.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
     }
+}
+
+/// State of the PubMed detail fetch behind the Cite modal.
+public enum CiteDetailStatus: Equatable, Sendable {
+    case idle
+    case loading
+    /// Citations include PubMed's volume, issue, pages, DOI and author names.
+    case fromPubMed
+    /// Citations use GLKB's fields only; the text says why.
+    case unavailable(String)
 }

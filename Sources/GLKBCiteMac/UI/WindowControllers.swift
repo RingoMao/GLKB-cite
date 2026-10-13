@@ -63,12 +63,20 @@ final class ResultPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(anchor: ScreenRect?) {
+        let screen = Self.targetScreen(for: anchor.map(CGRect.init))
+        if let visible = screen?.visibleFrame {
+            coordinator?.limitResultPanelHeight(toAvailable: visible.height - 2 * Self.screenMargin)
+        }
         panel.layoutIfNeeded()
         if !panel.isVisible {
-            placeAtTopRight(of: Self.targetScreen(for: anchor.map(CGRect.init)))
+            placeAtTopRight(of: screen)
         }
         panel.orderFrontRegardless()
+        // Key status is what makes Escape close the panel and lets its
+        // buttons respond to a first click; the editor the user was in keeps
+        // its own focus state and regains key status when the panel closes.
         panel.makeKey()
+        coordinator?.setResultPanelVisible(true)
     }
 
     func hide() {
@@ -77,6 +85,7 @@ final class ResultPanelController: NSObject, NSWindowDelegate {
         }
         panel.orderOut(nil)
         pinnedTopLeft = nil
+        coordinator?.setResultPanelVisible(false)
     }
 
     // MARK: Placement
@@ -246,7 +255,7 @@ final class SelectionBadgePanelController {
         constrainToVisibleScreen(preferring: screen)
         newPanel.orderFrontRegardless()
         CaptureDiagnostics.log(
-            "badge: shown \(placement) of pointer at \(Int(pointer.x)),\(Int(pointer.y))"
+            "badge: shown \(placement) of pointer"
         )
 
         scheduleDismissal()
@@ -304,6 +313,16 @@ final class SelectionBadgePanelController {
     }
 }
 
+
+/// An accessory (menu-bar) app that activated itself to show a window keeps
+/// keyboard focus after that window closes, with nowhere for input to go.
+/// Deactivating lets macOS return focus to the previously active app.
+@MainActor
+private func deactivateIfNoWindowsRemain() {
+    let stillVisible = NSApp.windows.contains { $0.isVisible && !($0 is NSPanel) }
+    if !stillVisible { NSApp.deactivate() }
+}
+
 @MainActor
 final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private weak var coordinator: AppCoordinator?
@@ -326,9 +345,16 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentViewController = NSHostingController(
-            rootView: OnboardingView().environmentObject(coordinator)
+            rootView: OnboardingView()
+                .environmentObject(coordinator)
+                .environmentObject(coordinator.settings)
         )
         window.center()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // Run after the window has actually gone away.
+        Task { @MainActor in deactivateIfNoWindowsRemain() }
     }
 
     func show() {
@@ -366,6 +392,11 @@ final class CiteSettingsWindowController: NSObject, NSWindowDelegate {
                 .frame(minWidth: 600, minHeight: 440)
         )
         window.center()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // Run after the window has actually gone away.
+        Task { @MainActor in deactivateIfNoWindowsRemain() }
     }
 
     func show() {
