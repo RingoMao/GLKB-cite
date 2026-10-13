@@ -1,16 +1,19 @@
 import Foundation
 
 /// A citation as styled text: a sequence of runs that are either roman or
-/// italic, so the same rendering can be shown in the UI, copied as rich
-/// text, or flattened to plain text.
+/// italic, optionally hyperlinked, so the same rendering can be shown in the
+/// UI, copied as rich text, or flattened to plain text.
 public struct FormattedCitation: Equatable, Sendable {
     public struct Run: Equatable, Sendable {
         public var text: String
         public var isItalic: Bool
+        /// The destination when the run is a hyperlink, such as the PubMed URL.
+        public var link: URL?
 
-        public init(text: String, isItalic: Bool = false) {
+        public init(text: String, isItalic: Bool = false, link: URL? = nil) {
             self.text = text
             self.isItalic = isItalic
+            self.link = link
         }
     }
 
@@ -21,7 +24,7 @@ public struct FormattedCitation: Equatable, Sendable {
     public init(runs: [Run]) {
         var merged: [Run] = []
         for run in runs where !run.text.isEmpty {
-            if let last = merged.last, last.isItalic == run.isItalic {
+            if let last = merged.last, last.isItalic == run.isItalic, last.link == run.link {
                 merged[merged.count - 1].text += run.text
             } else {
                 merged.append(run)
@@ -35,6 +38,7 @@ public struct FormattedCitation: Equatable, Sendable {
 
     /// The citation with italic runs carrying the `emphasized` inline
     /// presentation intent, which SwiftUI's `Text` renders in italics.
+    /// Links are left out: the Cite panel's boxes copy on click.
     public var attributedString: AttributedString {
         runs.reduce(into: AttributedString()) { result, run in
             var piece = AttributedString(run.text)
@@ -43,11 +47,16 @@ public struct FormattedCitation: Equatable, Sendable {
         }
     }
 
-    /// The citation as an HTML fragment, italic runs wrapped in `<i>`.
+    /// The citation as an HTML fragment, italic runs wrapped in `<i>` and
+    /// linked runs in `<a href>`.
     public var html: String {
         runs.map { run in
-            let escaped = Self.escapeHTML(run.text)
-            return run.isItalic ? "<i>\(escaped)</i>" : escaped
+            var fragment = Self.escapeHTML(run.text)
+            if run.isItalic { fragment = "<i>\(fragment)</i>" }
+            if let link = run.link {
+                fragment = "<a href=\"\(Self.escapeHTML(link.absoluteString))\">\(fragment)</a>"
+            }
+            return fragment
         }.joined()
     }
 

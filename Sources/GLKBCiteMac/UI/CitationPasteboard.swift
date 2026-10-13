@@ -14,13 +14,16 @@ enum CitationPasteboard {
         pasteboard.writeObjects([item])
     }
 
-    /// RTF with the italic runs set in the italic face of the system font.
+    /// RTF with the italic runs set in the italic face of the system font
+    /// and linked runs carrying their URL.
     static func rtfData(for citation: FormattedCitation) -> Data? {
         let roman = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let italic = NSFontManager.shared.convert(roman, toHaveTrait: .italicFontMask)
         let text = NSMutableAttributedString()
         for run in citation.runs {
-            text.append(NSAttributedString(string: run.text, attributes: [.font: run.isItalic ? italic : roman]))
+            var attributes: [NSAttributedString.Key: Any] = [.font: run.isItalic ? italic : roman]
+            if let link = run.link { attributes[.link] = link }
+            text.append(NSAttributedString(string: run.text, attributes: attributes))
         }
         return try? text.data(
             from: NSRange(location: 0, length: text.length),

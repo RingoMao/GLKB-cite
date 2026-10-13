@@ -115,6 +115,12 @@ public struct LiteratureReference: Codable, Hashable, Sendable, Identifiable {
     public var authors: [String]
     public var journal: String?
     public var date: String?
+    /// Bare DOI such as "10.1016/j.cmet.2023.11.011", without a resolver prefix.
+    public var doi: String?
+    public var volume: String?
+    public var issue: String?
+    /// Page range or article number as PubMed writes it: "48-61.e6", "e1002".
+    public var pages: String?
     public var citationCount: Int?
     public var relevanceReason: String?
     public var evidence: [LiteratureEvidence]
@@ -128,6 +134,10 @@ public struct LiteratureReference: Codable, Hashable, Sendable, Identifiable {
         authors: [String] = [],
         journal: String? = nil,
         date: String? = nil,
+        doi: String? = nil,
+        volume: String? = nil,
+        issue: String? = nil,
+        pages: String? = nil,
         citationCount: Int? = nil,
         relevanceReason: String? = nil,
         evidence: [LiteratureEvidence] = []
@@ -138,13 +148,17 @@ public struct LiteratureReference: Codable, Hashable, Sendable, Identifiable {
         self.authors = authors
         self.journal = journal
         self.date = date
+        self.doi = doi
+        self.volume = volume
+        self.issue = issue
+        self.pages = pages
         self.citationCount = citationCount
         self.relevanceReason = relevanceReason
         self.evidence = evidence
     }
 
     enum CodingKeys: String, CodingKey {
-        case pmid, title, url, authors, journal, date, evidence
+        case pmid, title, url, authors, journal, date, doi, volume, issue, pages, evidence
         case citationCount = "citation_count"
         case relevanceReason = "why"
     }

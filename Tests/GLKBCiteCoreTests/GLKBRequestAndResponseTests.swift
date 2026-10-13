@@ -89,6 +89,40 @@ final class GLKBRequestAndResponseTests: XCTestCase {
         )
     }
 
+    func testResponseParserReadsOptionalLocatorFields() throws {
+        let data = Data(#"""
+        {"status":"ok","references":[
+          {"pmid":"38128529","title":"Disrupted RNA editing","journal":"Cell metabolism","date":"2024",
+           "doi":"https://doi.org/10.1016/j.cmet.2023.11.011","volume":36,"issue":"1","pages":"48-61.e6"},
+          {"pmid":"8100367","title":"Induction of type I diabetes","doi":"not a doi","volume":"","pagination":"1700-3"},
+          {"pmid":"2891993","title":"Immunoreactive alpha-interferon"}
+        ]}
+        """#.utf8)
+        let references = try GLKBResponseParser.parse(data).references
+        XCTAssertEqual(references[0].doi, "10.1016/j.cmet.2023.11.011")
+        XCTAssertEqual(references[0].volume, "36")
+        XCTAssertEqual(references[0].issue, "1")
+        XCTAssertEqual(references[0].pages, "48-61.e6")
+        XCTAssertNil(references[1].doi)
+        XCTAssertNil(references[1].volume)
+        XCTAssertEqual(references[1].pages, "1700-3")
+        XCTAssertNil(references[2].doi)
+        XCTAssertNil(references[2].pages)
+    }
+
+    func testDOINormalization() {
+        XCTAssertEqual(GLKBResponseParser.doi("10.1038/nature12373"), "10.1038/nature12373")
+        XCTAssertEqual(GLKBResponseParser.doi("https://doi.org/10.1038/nature12373"), "10.1038/nature12373")
+        XCTAssertEqual(GLKBResponseParser.doi("http://dx.doi.org/10.1038/nature12373"), "10.1038/nature12373")
+        XCTAssertEqual(GLKBResponseParser.doi("doi: 10.1038/nature12373"), "10.1038/nature12373")
+        XCTAssertEqual(GLKBResponseParser.doi("DOI:10.1002/(SICI)1097-0258"), "10.1002/(SICI)1097-0258")
+        XCTAssertNil(GLKBResponseParser.doi(""))
+        XCTAssertNil(GLKBResponseParser.doi("10.1038"))
+        XCTAssertNil(GLKBResponseParser.doi("10.1038/"))
+        XCTAssertNil(GLKBResponseParser.doi("PMC1234567"))
+        XCTAssertNil(GLKBResponseParser.doi("10.1038/nature 12373"))
+    }
+
     func testNonNumericPMIDIsNotAcceptedAsAReference() throws {
         let data = #"{"status":"ok","references":[{"pmid":"not-a-pmid","title":"Article","url":"https://example.org/"}]}"#.data(using: .utf8)!
         XCTAssertThrowsError(try GLKBResponseParser.parse(data))

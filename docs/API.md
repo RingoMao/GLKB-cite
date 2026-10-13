@@ -46,6 +46,19 @@ mode. The endpoint rejects unknown request fields.
 }
 ```
 
+### Optional bibliographic fields
+
+The client also reads these reference fields when present; each may be
+omitted, `null`, or empty, and citations fall back to the PubMed URL without
+them:
+
+| Field | Type | Example | Notes |
+|---|---|---|---|
+| `doi` | string | `"10.1016/j.cmet.2023.11.011"` | Bare DOI; `https://doi.org/` and `doi:` prefixes are stripped. Becomes the citation link. |
+| `volume` | string or number | `"36"` | |
+| `issue` | string or number | `"1"` | |
+| `pages` | string | `"48-61.e6"` | PubMed `MedlinePgn` form; `pagination` is accepted as an alias. Article numbers such as `"e1002"` are fine. |
+
 `status: "no_results"` with an empty `references` array is also a successful,
 terminal response. GLKB Cite ignores malformed references, requires numeric
 PMIDs and non-empty titles, creates canonical PubMed URLs, and deduplicates by

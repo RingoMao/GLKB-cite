@@ -87,6 +87,10 @@ public enum GLKBResponseParser {
             authors: stringArray(dictionary["authors"]),
             journal: nilIfEmpty(firstString(in: dictionary, keys: ["journal"])),
             date: nilIfEmpty(firstString(in: dictionary, keys: ["date", "year"])),
+            doi: doi(firstString(in: dictionary, keys: ["doi", "DOI"])),
+            volume: nilIfEmpty(firstString(in: dictionary, keys: ["volume"])),
+            issue: nilIfEmpty(firstString(in: dictionary, keys: ["issue"])),
+            pages: nilIfEmpty(firstString(in: dictionary, keys: ["pages", "pagination"])),
             citationCount: integer(dictionary["n_citation"] ?? dictionary["citation_count"]),
             relevanceReason: nilIfEmpty(firstString(in: dictionary, keys: ["why"])),
             evidence: evidence
@@ -129,6 +133,22 @@ public enum GLKBResponseParser {
 
     private static func clean(_ string: String) -> String {
         LiteratureNetworking.clean(string)
+    }
+
+    /// A bare DOI, or nil unless the value is a DOI ("10.<registrant>/<suffix>").
+    /// Accepts resolver URLs and "doi:" prefixes: "https://doi.org/10.1/x" → "10.1/x".
+    static func doi(_ value: String) -> String? {
+        var text = value
+        for prefix in ["https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "http://dx.doi.org/", "doi:"] {
+            if text.lowercased().hasPrefix(prefix) {
+                text = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                break
+            }
+        }
+        guard text.hasPrefix("10."), let slash = text.firstIndex(of: "/"),
+              text.index(after: slash) < text.endIndex,
+              !text.contains(where: \.isWhitespace) else { return nil }
+        return text
     }
 
     private static func nilIfEmpty(_ value: String) -> String? {
