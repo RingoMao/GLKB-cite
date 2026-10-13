@@ -340,4 +340,194 @@ final class CitationFormatterTests: XCTestCase {
             XCTAssertTrue(style.longName.hasPrefix(style.rawValue), style.rawValue)
         }
     }
+
+    // MARK: With PubMed's record
+
+    /// PubMed's record for PMID 8028670, as efetch returns it.
+    private var natureArticle: ArticleMetadata {
+        ArticleMetadata(
+            pmid: "8028670",
+            title: "p53-dependent apoptosis in the absence of transcriptional activation of p53-target genes.",
+            authors: [
+                ArticleAuthor(lastName: "Caelles", foreName: "C", initials: "C"),
+                ArticleAuthor(lastName: "Helmberg", foreName: "A", initials: "A"),
+                ArticleAuthor(lastName: "Karin", foreName: "M", initials: "M"),
+            ],
+            journalTitle: "Nature", journalAbbreviation: "Nature",
+            year: "1994", month: "Jul", day: "21", volume: "370", issue: "6486",
+            pages: "220-3", doi: "10.1038/370220a0"
+        )
+    }
+
+    /// GLKB's view of the same article, with PubMed's record attached.
+    private var nature: LiteratureReference {
+        LiteratureReference(
+            pmid: "8028670", title: "p53-dependent apoptosis in the absence of transcriptional activation of p53-target genes",
+            authors: ["C Caelles", "A Helmberg", "M Karin"], journal: "Nature", date: "1994",
+            article: natureArticle
+        )
+    }
+
+    private var sciRep: LiteratureReference {
+        LiteratureReference(
+            pmid: "38291045", title: "Effect of interferon therapy on quality of life in patients with chronic hepatitis B.",
+            authors: ["M Zhang", "M Wan", "W Wang", "S Lin"], journal: "Sci Rep", date: "2024",
+            article: ArticleMetadata(
+                pmid: "38291045",
+                title: "Effect of interferon therapy on quality of life in patients with chronic hepatitis B.",
+                authors: [
+                    ArticleAuthor(lastName: "Zhang", foreName: "Mengdi", initials: "M"),
+                    ArticleAuthor(lastName: "Wan", foreName: "Meijuan", initials: "M"),
+                    ArticleAuthor(lastName: "Wang", foreName: "Wen", initials: "W"),
+                    ArticleAuthor(lastName: "Lin", foreName: "Shumei", initials: "S"),
+                ],
+                journalTitle: "Scientific reports", journalAbbreviation: "Sci Rep",
+                year: "2024", month: "Jan", day: "30", volume: "14", issue: "1",
+                pages: "2461", doi: "10.1038/s41598-024-51292-4"
+            )
+        )
+    }
+
+    func testEveryStyleUsesVolumeIssuePagesAndDOIFromPubMed() {
+        let title = "p53-dependent apoptosis in the absence of transcriptional activation of p53-target genes"
+        XCTAssertEqual(
+            cite(nature, .mla),
+            "Caelles, C., et al. \u{201C}\(title).\u{201D} Nature, vol. 370, no. 6486, 1994, pp. 220\u{2013}23, https://doi.org/10.1038/370220a0."
+        )
+        XCTAssertEqual(
+            cite(nature, .apa),
+            "Caelles, C., Helmberg, A., & Karin, M. (1994). \(title). Nature, 370(6486), 220\u{2013}223. https://doi.org/10.1038/370220a0"
+        )
+        XCTAssertEqual(
+            cite(nature, .chicago),
+            "Caelles, C., A. Helmberg, and M. Karin. \u{201C}\(title).\u{201D} Nature 370, no. 6486 (1994): 220\u{2013}23. https://doi.org/10.1038/370220a0."
+        )
+        XCTAssertEqual(
+            cite(nature, .harvard),
+            "Caelles, C., Helmberg, A. and Karin, M. (1994) \u{2018}\(title)\u{2019}, Nature, 370(6486), pp. 220\u{2013}223. "
+                + "Available at: https://doi.org/10.1038/370220a0 (Accessed: 2 October 2026)."
+        )
+        XCTAssertEqual(
+            cite(nature, .vancouver),
+            "Caelles C, Helmberg A, Karin M. \(title). Nature. 1994 Jul 21;370(6486):220-3. doi: 10.1038/370220a0. PMID: 8028670."
+        )
+    }
+
+    func testFullForenamesJournalCaseAndArticleNumbers() {
+        let title = "Effect of interferon therapy on quality of life in patients with chronic hepatitis B"
+        XCTAssertEqual(
+            cite(sciRep, .mla),
+            "Zhang, Mengdi, et al. \u{201C}\(title).\u{201D} Scientific Reports, vol. 14, no. 1, 2024, p. 2461, https://doi.org/10.1038/s41598-024-51292-4."
+        )
+        XCTAssertEqual(
+            cite(sciRep, .apa),
+            "Zhang, M., Wan, M., Wang, W., & Lin, S. (2024). \(title). Scientific Reports, 14(1), 2461. https://doi.org/10.1038/s41598-024-51292-4"
+        )
+        XCTAssertTrue(cite(sciRep, .chicago).hasPrefix("Zhang, Mengdi, Meijuan Wan, Wen Wang, and Shumei Lin. \u{201C}"))
+        XCTAssertTrue(cite(sciRep, .chicago).contains("\u{201D} Scientific Reports 14, no. 1 (2024): 2461. https://doi.org/"))
+        XCTAssertTrue(cite(sciRep, .harvard).contains("(2024) \u{2018}\(title)\u{2019}, Scientific Reports, 14(1), p. 2461. Available at: https://doi.org/"))
+        XCTAssertEqual(
+            cite(sciRep, .vancouver),
+            "Zhang M, Wan M, Wang W, Lin S. \(title). Sci Rep. 2024 Jan 30;14(1):2461. doi: 10.1038/s41598-024-51292-4. PMID: 38291045."
+        )
+    }
+
+    func testExportsCarryPubMedFields() {
+        let entry = CitationFormatter.bibtex(for: nature)
+        for line in [
+            "author = {Caelles, C. and Helmberg, A. and Karin, M.}",
+            "journal = {Nature}", "year = {1994}", "month = jul", "volume = {370}", "number = {6486}",
+            "pages = {220--223}", "doi = {10.1038/370220a0}", "pmid = {8028670}",
+            "url = {https://pubmed.ncbi.nlm.nih.gov/8028670/}",
+        ] {
+            XCTAssertTrue(entry.contains(line), "missing \(line) in\n\(entry)")
+        }
+        XCTAssertFalse(entry.contains("month = {"))
+
+        let lines = CitationFormatter.ris(for: sciRep).components(separatedBy: "\r\n")
+        for line in [
+            "AU  - Zhang, Mengdi", "AU  - Lin, Shumei", "T2  - Scientific Reports", "JO  - Sci Rep",
+            "VL  - 14", "IS  - 1", "SP  - 2461", "PY  - 2024", "DA  - 2024/01/30/",
+            "DO  - 10.1038/s41598-024-51292-4", "AN  - 38291045", "DB  - PubMed",
+        ] {
+            XCTAssertTrue(lines.contains(line), "missing \(line)")
+        }
+        XCTAssertFalse(lines.contains { $0.hasPrefix("EP  - ") })
+        let natureLines = CitationFormatter.ris(for: nature).components(separatedBy: "\r\n")
+        XCTAssertTrue(natureLines.contains("SP  - 220"))
+        XCTAssertTrue(natureLines.contains("EP  - 223"))
+        XCTAssertFalse(natureLines.contains("JO  - Nature"), "an abbreviation equal to the title is not repeated")
+    }
+
+    func testPubMedRecordWinsOverGLKBFieldsButGLKBFillsGaps() {
+        var sparse = nature
+        sparse.article = ArticleMetadata(pmid: "8028670", volume: "370", pages: "220-3")
+        // No PubMed authors, title or journal: GLKB's remain in use.
+        XCTAssertEqual(
+            cite(sparse, .apa),
+            "Caelles, C., Helmberg, A., & Karin, M. (1994). p53-dependent apoptosis in the absence of transcriptional activation of p53-target genes. "
+                + "Nature, 370, 220\u{2013}223. https://pubmed.ncbi.nlm.nih.gov/8028670/"
+        )
+        XCTAssertTrue(cite(sparse, .vancouver).hasSuffix("Nature. 1994;370:220-3. PMID: 8028670."))
+
+        var corrected = nature
+        corrected.title = "Wrong GLKB title"
+        corrected.authors = ["Nobody N"]
+        XCTAssertTrue(cite(corrected, .apa).hasPrefix("Caelles, C., Helmberg, A., & Karin, M. (1994). p53-dependent"))
+    }
+
+    func testPageRangesExpandAndAbbreviateLikeChicago() throws {
+        func range(_ medline: String) throws -> PageRange { try XCTUnwrap(PageRange(medline: medline)) }
+        XCTAssertEqual(try range("220-3").full, "220\u{2013}223")
+        XCTAssertEqual(try range("220-3").abbreviated, "220\u{2013}23")
+        XCTAssertEqual(try range("220-3").medline, "220-3")
+        XCTAssertEqual(try range("101-8").abbreviated, "101\u{2013}8")
+        XCTAssertEqual(try range("1103-4").abbreviated, "1103\u{2013}4")
+        XCTAssertEqual(try range("321-28").abbreviated, "321\u{2013}28")
+        XCTAssertEqual(try range("498-532").abbreviated, "498\u{2013}532")
+        XCTAssertEqual(try range("1087-9").abbreviated, "1087\u{2013}89")
+        XCTAssertEqual(try range("11564-615").abbreviated, "11564\u{2013}615")
+        XCTAssertEqual(try range("12991-3001").abbreviated, "12991\u{2013}3001")
+        XCTAssertEqual(try range("3-10").abbreviated, "3\u{2013}10")
+        XCTAssertEqual(try range("100-104").abbreviated, "100\u{2013}104")
+        XCTAssertEqual(try range("110-5").abbreviated, "110\u{2013}15")
+        XCTAssertEqual(try range("998-1004").abbreviated, "998\u{2013}1004")
+        XCTAssertEqual(try range("S12-S19").full, "S12\u{2013}S19")
+        XCTAssertEqual(try range("e101456").full, "e101456")
+        XCTAssertFalse(try range("2461").isRange)
+        XCTAssertEqual(try range("220-3; discussion 230-5").full, "220\u{2013}223")
+        XCTAssertNil(PageRange(medline: "  "))
+    }
+
+    func testJournalCaseAndDOINormalisation() {
+        XCTAssertEqual(CitationFormatter.journalCase("Scientific reports"), "Scientific Reports")
+        XCTAssertEqual(CitationFormatter.journalCase("The Journal of clinical investigation"), "The Journal of Clinical Investigation")
+        XCTAssertEqual(CitationFormatter.journalCase("Proceedings of the National Academy of Sciences of the United States of America"),
+                       "Proceedings of the National Academy of Sciences of the United States of America")
+        XCTAssertEqual(CitationFormatter.journalCase("mAbs"), "mAbs")
+        XCTAssertEqual(CitationFormatter.journalCase("BMJ (Clinical research ed.)"), "BMJ (Clinical Research Ed.)")
+        XCTAssertEqual(CitationFormatter.journalCase("Cell reports. Medicine"), "Cell Reports. Medicine")
+        XCTAssertEqual(CitationFormatter.journalCase("Cell Reports Medicine"), "Cell Reports Medicine")
+
+        XCTAssertEqual(CitationFormatter.normalizedDOI("doi: 10.1038/370220a0"), "10.1038/370220a0")
+        XCTAssertEqual(CitationFormatter.normalizedDOI("https://doi.org/10.1038/370220a0"), "10.1038/370220a0")
+        XCTAssertEqual(CitationFormatter.normalizedDOI("http://dx.doi.org/10.1/x"), "10.1/x")
+        XCTAssertEqual(CitationFormatter.normalizedDOI("not a doi"), "")
+        XCTAssertEqual(CitationFormatter.normalizedDOI(nil), "")
+    }
+
+    func testStructuredAuthorsRenderInitialsAndSuffixes() throws {
+        let author = try XCTUnwrap(AuthorName(article: ArticleAuthor(lastName: "Vu", foreName: "Thi Hong Ha", initials: "TH")))
+        XCTAssertEqual(author.inverted(fullGivenNames: false), "Vu, T. H.")
+        XCTAssertEqual(author.inverted(fullGivenNames: true), "Vu, Thi Hong Ha")
+        XCTAssertEqual(author.vancouver, "Vu TH")
+
+        let junior = try XCTUnwrap(AuthorName(article: ArticleAuthor(lastName: "Smith", foreName: "John", initials: "J", suffix: "Jr")))
+        XCTAssertEqual(junior.inverted(fullGivenNames: true), "Smith, John, Jr.")
+        XCTAssertEqual(junior.vancouver, "Smith J Jr")
+
+        let group = try XCTUnwrap(AuthorName(article: ArticleAuthor(collectiveName: "GBD 2019 Collaborators")))
+        XCTAssertTrue(group.isCorporate)
+        XCTAssertNil(AuthorName(article: ArticleAuthor(initials: "X")))
+    }
 }

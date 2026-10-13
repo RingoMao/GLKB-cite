@@ -165,18 +165,3 @@ public final class GLKBBackend: LiteratureBackend, @unchecked Sendable {
         return message
     }
 }
-
-/// Refuses every redirect: the Bearer header is stripped on redirect anyway,
-/// so a redirected request can never succeed against GLKB — but it would
-/// re-POST the user's selected text to whatever host the redirect names.
-private final class RedirectRefusingDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(nil)
-    }
-}

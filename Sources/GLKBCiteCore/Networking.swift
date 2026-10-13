@@ -3,6 +3,22 @@ import Foundation
 import FoundationNetworking
 #endif
 
+/// Refuses every redirect. The GLKB Bearer header is stripped on redirect
+/// anyway, so a redirected request could never succeed there, but it would
+/// re-POST the user's selected text to whatever host the redirect names; for
+/// PubMed a redirect would carry the PMIDs elsewhere.
+final class RedirectRefusingDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
 enum LiteratureNetworking {
     /// Longest server-supplied error text that is surfaced to the user.
     static let maximumServerMessageLength = 200

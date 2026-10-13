@@ -118,6 +118,9 @@ public struct LiteratureReference: Codable, Hashable, Sendable, Identifiable {
     public var citationCount: Int?
     public var relevanceReason: String?
     public var evidence: [LiteratureEvidence]
+    /// Bibliographic details fetched from PubMed for the Cite modal; nil
+    /// until fetched. Citations fall back to GLKB's fields without it.
+    public var article: ArticleMetadata?
 
     public var id: String { pmid }
 
@@ -130,7 +133,8 @@ public struct LiteratureReference: Codable, Hashable, Sendable, Identifiable {
         date: String? = nil,
         citationCount: Int? = nil,
         relevanceReason: String? = nil,
-        evidence: [LiteratureEvidence] = []
+        evidence: [LiteratureEvidence] = [],
+        article: ArticleMetadata? = nil
     ) {
         self.pmid = pmid
         self.title = title
@@ -141,10 +145,11 @@ public struct LiteratureReference: Codable, Hashable, Sendable, Identifiable {
         self.citationCount = citationCount
         self.relevanceReason = relevanceReason
         self.evidence = evidence
+        self.article = article
     }
 
     enum CodingKeys: String, CodingKey {
-        case pmid, title, url, authors, journal, date, evidence
+        case pmid, title, url, authors, journal, date, evidence, article
         case citationCount = "citation_count"
         case relevanceReason = "why"
     }
