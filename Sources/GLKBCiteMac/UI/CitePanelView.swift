@@ -46,11 +46,12 @@ struct CitePanelView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(CitationFormatter.Style.allCases, id: \.rawValue) { style in
+                        let citation = CitationFormatter.formattedCitation(for: reference, style: style)
                         Text(style.rawValue)
                             .font(.system(size: 12.5, weight: .bold))
                             .padding(.top, style == CitationFormatter.Style.allCases.first ? 0 : 8)
-                        FormatBox(text: CitationFormatter.citation(for: reference, style: style)) {
-                            copy(CitationFormatter.citation(for: reference, style: style))
+                        FormatBox(citation: citation) {
+                            CitationPasteboard.write(citation)
                             coordinator.showToast("\(style.rawValue) citation copied to clipboard")
                         }
                     }
@@ -94,16 +95,17 @@ struct CitePanelView: View {
     }
 }
 
-/// A citation rendering that copies on click and tints on hover.
+/// A citation rendering that copies on click and tints on hover. Italic
+/// runs (journal titles) come through the attributed string.
 private struct FormatBox: View {
-    let text: String
+    let citation: FormattedCitation
     let action: () -> Void
 
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            Text(text)
+            Text(citation.attributedString)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .lineSpacing(3)

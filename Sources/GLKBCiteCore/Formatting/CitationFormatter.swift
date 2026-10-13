@@ -27,6 +27,18 @@ public enum CitationFormatter {
         style: Style,
         accessDate: Date = Date()
     ) -> String {
+        formattedCitation(for: reference, style: style, accessDate: accessDate).plainText
+    }
+
+    /// The citation as styled runs. Journal titles are italic in MLA, APA,
+    /// Chicago and Harvard, as is the PubMed database name in MLA's second
+    /// container; article titles stay roman in every style, and Vancouver
+    /// uses no italics at all.
+    public static func formattedCitation(
+        for reference: LiteratureReference,
+        style: Style,
+        accessDate: Date = Date()
+    ) -> FormattedCitation {
         let authors = reference.authors.compactMap(AuthorName.parse)
         let title = cleanTitle(reference.title)
         let titleSentence = endsWithTerminalPunctuation(title) ? title : "\(title)."
@@ -34,38 +46,37 @@ public enum CitationFormatter {
         let year = year(from: reference.date)
         let pmid = clean(reference.pmid)
         let url = (PubMed.url(for: reference.pmid) ?? reference.url)?.absoluteString ?? ""
+        var parts: [Runs] = []
 
         switch style {
         case .mla:
             // Author. "Title." Journal, Year. Database, URL.
-            var parts: [String] = []
-            if let head = authorBlock(authors, style: style) { parts.append(head) }
-            parts.append("\u{201C}\(titleSentence)\u{201D}")
-            parts += container(journal, year, separator: ", ", undated: nil)
-            if !url.isEmpty { parts.append("PubMed, \(url).") }
-            return parts.joined(separator: " ")
+            if let head = authorBlock(authors, style: style) { parts.append(plain(head)) }
+            parts.append(plain("\u{201C}\(titleSentence)\u{201D}"))
+            if let container = container(journal, year, separator: ", ", undated: nil, italicJournal: true) {
+                parts.append(container)
+            }
+            if !url.isEmpty { parts.append(italic("PubMed") + plain(", \(url).")) }
 
         case .apa:
             // Author, A. A., & Author, B. B. (Year). Title. Journal. URL
             let date = year.isEmpty ? "n.d." : year
-            var parts: [String] = []
             if let head = authorBlock(authors, style: style) {
-                parts += [head, "(\(date)).", titleSentence]
+                parts += [plain(head), plain("(\(date))."), plain(titleSentence)]
             } else {
-                parts += [titleSentence, "(\(date))."]
+                parts += [plain(titleSentence), plain("(\(date)).")]
             }
-            if !journal.isEmpty { parts.append("\(journal).") }
-            if !url.isEmpty { parts.append(url) }
-            return parts.joined(separator: " ")
+            if !journal.isEmpty { parts.append(italic(journal) + plain(".")) }
+            if !url.isEmpty { parts.append(plain(url)) }
 
         case .chicago:
             // Author, A., B. Author, and C. Author. "Title." Journal, Year. URL.
-            var parts: [String] = []
-            if let head = authorBlock(authors, style: style) { parts.append(head) }
-            parts.append("\u{201C}\(titleSentence)\u{201D}")
-            parts += container(journal, year, separator: ", ", undated: "n.d.")
-            if !url.isEmpty { parts.append("\(url).") }
-            return parts.joined(separator: " ")
+            if let head = authorBlock(authors, style: style) { parts.append(plain(head)) }
+            parts.append(plain("\u{201C}\(titleSentence)\u{201D}"))
+            if let container = container(journal, year, separator: ", ", undated: "n.d.", italicJournal: true) {
+                parts.append(container)
+            }
+            if !url.isEmpty { parts.append(plain("\(url).")) }
 
         case .harvard:
             // Author, A., Author, B. and Author, C. (Year) 'Title', Journal.
@@ -73,26 +84,29 @@ public enum CitationFormatter {
             let date = year.isEmpty ? "no date" : year
             let quotedTitle = "\u{2018}\(title)\u{2019}"
             let titleStop = endsWithTerminalPunctuation(title) ? "" : "."
-            var head: String
+            var runs: Runs
             if let authorsText = authorBlock(authors, style: style) {
-                head = "\(authorsText) (\(date)) \(quotedTitle)"
-                head += journal.isEmpty ? titleStop : ", \(journal)."
+                runs = plain("\(authorsText) (\(date)) \(quotedTitle)")
+                runs += journal.isEmpty ? plain(titleStop) : plain(", ") + italic(journal) + plain(".")
             } else {
-                head = "\(quotedTitle) (\(date))"
-                head += journal.isEmpty ? "." : " \(journal)."
+                runs = plain("\(quotedTitle) (\(date))")
+                runs += journal.isEmpty ? plain(".") : plain(" ") + italic(journal) + plain(".")
             }
-            guard !url.isEmpty else { return head }
-            return "\(head) Available at: \(url) (Accessed: \(harvardDate(accessDate)))."
+            if !url.isEmpty {
+                runs += plain(" Available at: \(url) (Accessed: \(harvardDate(accessDate))).")
+            }
+            return FormattedCitation(runs: runs)
 
         case .vancouver:
             // Author AA, Author BB. Title. Journal. Year. PMID: n.
-            var parts: [String] = []
-            if let head = authorBlock(authors, style: style) { parts.append(head) }
-            parts.append(titleSentence)
-            parts += container(journal, year, separator: ". ", undated: nil)
-            if !pmid.isEmpty { parts.append("PMID: \(pmid).") }
-            return parts.joined(separator: " ")
+            if let head = authorBlock(authors, style: style) { parts.append(plain(head)) }
+            parts.append(plain(titleSentence))
+            if let container = container(journal, year, separator: ". ", undated: nil, italicJournal: false) {
+                parts.append(container)
+            }
+            if !pmid.isEmpty { parts.append(plain("PMID: \(pmid).")) }
         }
+        return FormattedCitation(runs: joined(parts))
     }
 
     /// BibTeX `@article` entry.
@@ -212,20 +226,39 @@ public enum CitationFormatter {
         return text.hasSuffix(".") ? text : "\(text)."
     }
 
-    /// Journal and year as one element, in the style's punctuation, or
-    /// nothing when both are missing. `undated` is the placeholder a style
-    /// uses for a journal without a year ("n.d."), nil to omit the year.
+    /// Journal and year as one element, in the style's punctuation, or nil
+    /// when both are missing. `undated` is the placeholder a style uses for
+    /// a journal without a year ("n.d."), nil to omit the year; the journal
+    /// is italic where the style sets it so.
     private static func container(
-        _ journal: String, _ year: String, separator: String, undated: String?
-    ) -> [String] {
+        _ journal: String, _ year: String, separator: String, undated: String?, italicJournal: Bool
+    ) -> Runs? {
+        let journalRuns = italicJournal ? italic(journal) : plain(journal)
         switch (journal.isEmpty, year.isEmpty) {
-        case (false, false): return ["\(journal)\(separator)\(year)."]
+        case (false, false): return journalRuns + plain("\(separator)\(year).")
         case (false, true):
-            guard let undated else { return ["\(journal)."] }
-            return ["\(journal)\(separator)\(undated)\(undated.hasSuffix(".") ? "" : ".")"]
-        case (true, false): return ["\(year)."]
-        case (true, true): return []
+            guard let undated else { return journalRuns + plain(".") }
+            return journalRuns + plain("\(separator)\(undated)\(undated.hasSuffix(".") ? "" : ".")")
+        case (true, false): return plain("\(year).")
+        case (true, true): return nil
         }
+    }
+
+    // MARK: - Styled runs
+
+    private typealias Runs = [FormattedCitation.Run]
+
+    private static func plain(_ text: String) -> Runs { [FormattedCitation.Run(text: text, isItalic: false)] }
+    private static func italic(_ text: String) -> Runs { [FormattedCitation.Run(text: text, isItalic: true)] }
+
+    /// Joins the parts of a citation with single spaces.
+    private static func joined(_ parts: [Runs]) -> Runs {
+        var result: Runs = []
+        for (index, part) in parts.enumerated() {
+            if index > 0 { result += plain(" ") }
+            result += part
+        }
+        return result
     }
 
     // MARK: - Pieces

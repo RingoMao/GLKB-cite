@@ -216,6 +216,48 @@ final class CitationFormatterTests: XCTestCase {
         XCTAssertEqual(cite(bare, .vancouver), "Bare title. PMID: 999.")
     }
 
+    // MARK: Italics
+
+    func testJournalTitlesAreItalicWhereStylesRequire() {
+        for style in [CitationFormatter.Style.mla, .apa, .chicago, .harvard] {
+            let formatted = CitationFormatter.formattedCitation(for: reference, style: style, accessDate: accessed)
+            XCTAssertEqual(formatted.plainText, cite(reference, style), style.rawValue)
+            XCTAssertTrue(formatted.runs.contains { $0.isItalic && $0.text == "Cell Reports Medicine" }, style.rawValue)
+            XCTAssertFalse(formatted.runs.contains { $0.isItalic && $0.text.contains("Type I interferon") }, style.rawValue)
+        }
+        let vancouver = CitationFormatter.formattedCitation(for: reference, style: .vancouver, accessDate: accessed)
+        XCTAssertFalse(vancouver.runs.contains(where: \.isItalic))
+        XCTAssertEqual(vancouver.plainText, cite(reference, .vancouver))
+    }
+
+    func testMLAItalicisesTheDatabaseName() {
+        let mla = CitationFormatter.formattedCitation(for: reference, style: .mla, accessDate: accessed)
+        XCTAssertTrue(mla.runs.contains { $0.isItalic && $0.text == "PubMed" })
+        XCTAssertTrue(mla.html.hasSuffix(
+            "<i>Cell Reports Medicine</i>, 2024. <i>PubMed</i>, https://pubmed.ncbi.nlm.nih.gov/38291045/."
+        ))
+    }
+
+    func testFormattedCitationRenderings() {
+        let apa = CitationFormatter.formattedCitation(for: reference, style: .apa, accessDate: accessed)
+        XCTAssertTrue(apa.html.contains("Type I interferon signaling precedes islet autoimmunity. <i>Cell Reports Medicine</i>. https://"))
+        XCTAssertEqual(String(apa.attributedString.characters), apa.plainText)
+        let italicRuns = apa.attributedString.runs
+            .filter { $0.inlinePresentationIntent == .emphasized }
+            .map { String(apa.attributedString[$0.range].characters) }
+        XCTAssertEqual(italicRuns, ["Cell Reports Medicine"])
+
+        var ampersand = reference
+        ampersand.journal = "Science & Medicine"
+        XCTAssertTrue(
+            CitationFormatter.formattedCitation(for: ampersand, style: .harvard, accessDate: accessed).html
+                .contains("<i>Science &amp; Medicine</i>")
+        )
+
+        let merged = FormattedCitation(runs: [.init(text: "a"), .init(text: ""), .init(text: "b"), .init(text: "c", isItalic: true)])
+        XCTAssertEqual(merged.runs, [.init(text: "ab"), .init(text: "c", isItalic: true)])
+    }
+
     // MARK: Exports
 
     func testBibTeXEntry() {
