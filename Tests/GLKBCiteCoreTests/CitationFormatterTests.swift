@@ -586,4 +586,174 @@ final class CitationFormatterTests: XCTestCase {
         XCTAssertTrue(group.isCorporate)
         XCTAssertNil(AuthorName(article: ArticleAuthor(initials: "X")))
     }
+
+    // MARK: Rare PubMed records
+
+    private var statPearlsChapter: LiteratureReference {
+        LiteratureReference(
+            pmid: "42777106", title: "Lupus Panniculitis", authors: ["DL Arnold", "MA Blum", "P Shitabata"], journal: "StatPearls", date: "2026",
+            article: ArticleMetadata(
+                pmid: "42777106", kind: .bookChapter, title: "Lupus Panniculitis",
+                authors: [
+                    ArticleAuthor(lastName: "Arnold", foreName: "David L.", initials: "DL"),
+                    ArticleAuthor(lastName: "Blum", foreName: "Marissa A.", initials: "MA"),
+                    ArticleAuthor(lastName: "Shitabata", foreName: "Paul", initials: "P"),
+                ],
+                year: "2026", month: "01", publicationTypes: ["Study Guide"],
+                bookTitle: "StatPearls", publisher: "StatPearls Publishing", publisherLocation: "Treasure Island (FL)",
+                bookshelfID: "NBK625053", contributionDate: ArticleDate(year: "2026", month: "9", day: "14")
+            )
+        )
+    }
+
+    func testBookshelfChaptersCiteTheBookPublisherAndChapterURL() {
+        let url = "https://www.ncbi.nlm.nih.gov/books/NBK625053/"
+        XCTAssertEqual(
+            cite(statPearlsChapter, .mla),
+            "Arnold, David L., et al. \u{201C}Lupus Panniculitis.\u{201D} StatPearls, StatPearls Publishing, 2026. NCBI Bookshelf, \(url)."
+        )
+        XCTAssertEqual(
+            cite(statPearlsChapter, .apa),
+            "Arnold, D. L., Blum, M. A., & Shitabata, P. (2026). Lupus Panniculitis. In StatPearls. StatPearls Publishing. \(url)"
+        )
+        XCTAssertEqual(
+            cite(statPearlsChapter, .chicago),
+            "Arnold, David L., Marissa A. Blum, and Paul Shitabata. \u{201C}Lupus Panniculitis.\u{201D} In StatPearls. Treasure Island (FL): StatPearls Publishing, 2026. \(url)."
+        )
+        XCTAssertEqual(
+            cite(statPearlsChapter, .harvard),
+            "Arnold, D. L., Blum, M. A. and Shitabata, P. (2026) \u{2018}Lupus Panniculitis\u{2019}, in StatPearls. Treasure Island (FL): StatPearls Publishing. "
+                + "Available at: \(url) (Accessed: 2 October 2026)."
+        )
+        XCTAssertEqual(
+            cite(statPearlsChapter, .vancouver),
+            "Arnold DL, Blum MA, Shitabata P. Lupus Panniculitis. 2026 Sep 14. In: StatPearls [Internet]. Treasure Island (FL): StatPearls Publishing; 2026 Jan\u{2013}. "
+                + "Available from: \(url) PMID: 42777106."
+        )
+        let formatted = CitationFormatter.formattedCitation(for: statPearlsChapter, style: .mla, accessDate: accessed)
+        XCTAssertTrue(formatted.runs.contains { $0.isItalic && $0.text == "StatPearls" })
+        XCTAssertTrue(formatted.runs.contains { $0.isItalic && $0.text == "NCBI Bookshelf" })
+
+        let entry = CitationFormatter.bibtex(for: statPearlsChapter)
+        XCTAssertTrue(entry.hasPrefix("@incollection{pmid42777106,"))
+        for line in ["booktitle = {StatPearls}", "publisher = {StatPearls Publishing}", "address = {Treasure Island (FL)}", "url = {\(url)}"] {
+            XCTAssertTrue(entry.contains(line), line)
+        }
+        XCTAssertFalse(entry.contains("journal = "))
+        let ris = CitationFormatter.ris(for: statPearlsChapter).components(separatedBy: "\r\n")
+        for line in ["TY  - CHAP", "T2  - StatPearls", "PB  - StatPearls Publishing", "CY  - Treasure Island (FL)", "UR  - \(url)"] {
+            XCTAssertTrue(ris.contains(line), line)
+        }
+    }
+
+    func testEditedBooksNameTheirEditorsInEachStyle() {
+        var chapter = statPearlsChapter
+        chapter.article?.bookTitle = "GeneReviews\u{AE}"
+        chapter.article?.editors = [
+            ArticleAuthor(lastName: "Adam", foreName: "Margaret P", initials: "MP"),
+            ArticleAuthor(lastName: "Feldman", foreName: "Jerry", initials: "J"),
+            ArticleAuthor(lastName: "Mirzaa", foreName: "Ghayda M", initials: "GM"),
+        ]
+        XCTAssertTrue(cite(chapter, .mla).contains("GeneReviews\u{AE}, edited by Margaret P. Adam et al., StatPearls Publishing, 2026."))
+        XCTAssertTrue(cite(chapter, .apa).contains("In M. P. Adam, J. Feldman, & G. M. Mirzaa (Eds.), GeneReviews\u{AE}. StatPearls Publishing."))
+        XCTAssertTrue(cite(chapter, .chicago).contains("In GeneReviews\u{AE}, edited by Margaret P. Adam, Jerry Feldman, and Ghayda M. Mirzaa. Treasure Island (FL):"))
+        XCTAssertTrue(cite(chapter, .harvard).contains(", in Adam, M. P., Feldman, J. and Mirzaa, G. M. (eds) GeneReviews\u{AE}. Treasure Island (FL):"))
+        XCTAssertTrue(cite(chapter, .vancouver).contains("In: Adam MP, Feldman J, Mirzaa GM, editors. GeneReviews\u{AE} [Internet]."))
+        XCTAssertTrue(CitationFormatter.bibtex(for: chapter).contains("editor = {Adam, Margaret P. and Feldman, Jerry and Mirzaa, Ghayda M.}"))
+        XCTAssertTrue(CitationFormatter.ris(for: chapter).contains("A2  - Feldman, Jerry\r\n"))
+
+        chapter.article?.editors.removeLast(2)
+        XCTAssertTrue(cite(chapter, .apa).contains("In M. P. Adam (Ed.), "))
+        XCTAssertTrue(cite(chapter, .harvard).contains("in Adam, M. P. (ed.) "))
+        XCTAssertTrue(cite(chapter, .vancouver).contains("In: Adam MP, editor. "))
+    }
+
+    func testArticleNumbersIdentifiersSeasonsAndQualifiers() {
+        var elife = sciRep
+        elife.article = ArticleMetadata(
+            pmid: "38206862", title: "Binding and sequestration of poison frog alkaloids by a plasma globulin.",
+            authors: [ArticleAuthor(lastName: "Alvarez-Buylla", foreName: "Aurora", initials: "A")],
+            journalTitle: "eLife", journalAbbreviation: "Elife", year: "2023", month: "Dec", day: "19", volume: "12",
+            articleNumber: "e85096", doi: "10.7554/eLife.85096"
+        )
+        elife.pmid = "38206862"
+        XCTAssertTrue(cite(elife, .apa).contains(". eLife, 12, Article e85096. https://doi.org/10.7554/eLife.85096"), cite(elife, .apa))
+        XCTAssertTrue(cite(elife, .mla).contains("eLife, vol. 12, 2023, p. e85096, https://doi.org/"))
+        XCTAssertTrue(cite(elife, .chicago).contains("eLife 12 (2023): e85096."))
+        XCTAssertTrue(cite(elife, .harvard).contains("eLife, 12, p. e85096."))
+        XCTAssertTrue(cite(elife, .vancouver).hasSuffix("Elife. 2023 Dec 19;12:e85096. doi: 10.7554/eLife.85096. PMID: 38206862."))
+
+        var plos = elife
+        plos.article?.pages = "e0261090"
+        plos.article?.articleNumber = nil
+        XCTAssertTrue(cite(plos, .apa).contains(", 12, Article e0261090."))
+
+        var preprint = elife
+        preprint.pmid = "42859506"
+        preprint.article = ArticleMetadata(
+            pmid: "42859506", title: "Broken scale symmetries in undercomplete linear autoencoders.",
+            authors: [ArticleAuthor(lastName: "Pashakhanloo", foreName: "Farhad", initials: "F")],
+            journalTitle: "ArXiv", journalAbbreviation: "ArXiv", year: "2026", month: "Oct", day: "02",
+            articleNumber: "arXiv:2610.03640v1", publicationTypes: ["Journal Article", "Preprint"]
+        )
+        XCTAssertEqual(
+            cite(preprint, .vancouver),
+            "Pashakhanloo F. Broken scale symmetries in undercomplete linear autoencoders. ArXiv [Preprint]. 2026 Oct 2:arXiv:2610.03640v1. PMID: 42859506."
+        )
+        XCTAssertTrue(cite(preprint, .apa).hasSuffix(". ArXiv. https://pubmed.ncbi.nlm.nih.gov/42859506/"), "no page slot for an arXiv id")
+        XCTAssertTrue(cite(preprint, .mla).contains("ArXiv, 2026, arXiv:2610.03640v1. PubMed, "))
+        XCTAssertTrue(cite(preprint, .harvard).contains("ArXiv, arXiv:2610.03640v1. Available at:"))
+        XCTAssertTrue(CitationFormatter.bibtex(for: preprint).contains("note = {Preprint}"))
+
+        var seasonal = elife
+        seasonal.article?.month = "Nov-Dec"
+        seasonal.article?.day = nil
+        XCTAssertTrue(cite(seasonal, .vancouver).contains("Elife. 2023 Nov-Dec;12:e85096."))
+        XCTAssertFalse(CitationFormatter.bibtex(for: seasonal).contains("month = "))
+        XCTAssertFalse(CitationFormatter.ris(for: seasonal).contains("DA  - "))
+
+        var lancet = elife
+        lancet.article?.journalTitle = "Lancet (London, England)"
+        lancet.article?.journalAbbreviation = "Lancet"
+        XCTAssertTrue(cite(lancet, .apa).contains(". Lancet, 12, Article e85096."))
+        XCTAssertEqual(CitationFormatter.stripJournalQualifier("BMJ (Clinical research ed.)"), "BMJ")
+        XCTAssertEqual(CitationFormatter.stripJournalQualifier("(London)"), "(London)")
+        XCTAssertEqual(CitationFormatter.stripJournalQualifier("Medicina (B Aires)"), "Medicina")
+
+        XCTAssertEqual(CitationFormatter.monthNumber("Sept."), 9)
+        XCTAssertEqual(CitationFormatter.monthNumber("July"), 7)
+        XCTAssertEqual(CitationFormatter.monthNumber("7"), 7)
+        XCTAssertNil(CitationFormatter.monthNumber("Nov-Dec"))
+        XCTAssertNil(CitationFormatter.monthNumber("Spring"))
+        XCTAssertNil(CitationFormatter.monthNumber("13"))
+    }
+
+    func testRetractionsDOIEncodingAndDataErrorsInAuthors() throws {
+        var retracted = sciRep
+        retracted.article?.publicationTypes = ["Journal Article", "Retracted Publication"]
+        XCTAssertTrue(CitationFormatter.bibtex(for: retracted).contains("note = {Retracted publication}"))
+        XCTAssertTrue(CitationFormatter.ris(for: retracted).contains("N1  - Retracted publication\r\n"))
+        XCTAssertEqual(cite(retracted, .vancouver), cite(sciRep, .vancouver), "the citation text itself is unchanged")
+
+        var sici = sciRep
+        sici.article?.doi = "10.1002/(sici)1097-0258(19980430)17:8<857::aid-sim777>3.0.co;2-e"
+        XCTAssertTrue(cite(sici, .apa).hasSuffix("https://doi.org/10.1002/(sici)1097-0258(19980430)17:8%3C857::aid-sim777%3E3.0.co;2-e"), cite(sici, .apa))
+        XCTAssertTrue(cite(sici, .vancouver).contains("doi: 10.1002/(sici)1097-0258(19980430)17:8<857::aid-sim777>3.0.co;2-e."))
+
+        let repaired = try XCTUnwrap(AuthorName(article: ArticleAuthor(lastName: "Jr", foreName: "Fedor \u{010C}iampor", initials: "F\u{010C}")))
+        XCTAssertEqual(repaired.inverted(fullGivenNames: false), "\u{010C}iampor, F., Jr.")
+        XCTAssertEqual(repaired.vancouver, "\u{010C}iampor F Jr")
+        let genuineJr = try XCTUnwrap(AuthorName(article: ArticleAuthor(lastName: "Jr", foreName: "Ken", initials: "K")))
+        XCTAssertEqual(genuineJr.surname, "Jr", "a one-token forename gives nothing to promote")
+
+        XCTAssertNil(AuthorName.parse("[No authors listed]"))
+        XCTAssertNil(AuthorName.parse("et al."))
+        XCTAssertNil(AuthorName.parse("et al"))
+        var anonymous = reference
+        anonymous.authors = ["[No authors listed]"]
+        XCTAssertTrue(cite(anonymous, .apa).hasPrefix("Type I interferon signaling precedes islet autoimmunity. (2024)."))
+        var truncated = reference
+        truncated.authors = ["Chen J", "et al"]
+        XCTAssertTrue(cite(truncated, .vancouver).hasPrefix("Chen J. Type I"))
+    }
 }

@@ -83,9 +83,20 @@ struct CitePanelView: View {
 
                 Spacer()
 
-                detailStatus
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .trailing, spacing: 3) {
+                    if let article = reference.article, article.isRetracted {
+                        Label("PubMed marks this article as retracted", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Theme.danger)
+                            .accessibilityAddTraits(.isStaticText)
+                    } else if let article = reference.article, article.isPreprint {
+                        Text("Preprint: not peer reviewed")
+                            .foregroundStyle(Theme.amber)
+                    }
+                    detailStatus
+                        .foregroundStyle(.secondary)
+                }
+                .font(.system(size: 10.5))
+                .multilineTextAlignment(.trailing)
             }
             .padding(EdgeInsets(top: 14, leading: 20, bottom: 18, trailing: 20))
         }

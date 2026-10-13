@@ -3,4 +3,4 @@
 # placeholders that the build replaces. Raise BUILD_NUMBER for every build
 # handed to anyone (Sparkle compares it numerically) and VERSION for releases.
 VERSION=0.2.0
-BUILD_NUMBER=11
+BUILD_NUMBER=12

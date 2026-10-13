@@ -4,7 +4,8 @@ import FoundationXML
 #endif
 
 /// Parses the XML that NCBI's `efetch.fcgi?db=pubmed&retmode=xml` returns
-/// (a `PubmedArticleSet`) into `ArticleMetadata` records.
+/// (a `PubmedArticleSet` of `PubmedArticle` and `PubmedBookArticle` records)
+/// into `ArticleMetadata`.
 public enum PubMedArticleParser {
     public static func parse(_ data: Data) throws -> [ArticleMetadata] {
         let parser = XMLParser(data: data)
@@ -36,6 +37,16 @@ public enum PubMedArticleParser {
         return (year, month.isEmpty ? nil : month)
     }
 
+    /// Whether a `pii` e-locator names the article itself ("e85096",
+    /// "arXiv:2610.03640v1", "2461") rather than being a publisher's
+    /// internal identifier ("d6ra03309a", "10.1177_0972…").
+    static func isArticleNumber(_ pii: String) -> Bool {
+        let value = LiteratureNetworking.clean(pii)
+        if value.range(of: #"^[eE][0-9]+$"#, options: .regularExpression) != nil { return true }
+        if value.lowercased().hasPrefix("arxiv:") { return true }
+        return value.range(of: #"^[0-9]{4,}$"#, options: .regularExpression) != nil
+    }
+
     private final class Delegate: NSObject, XMLParserDelegate {
         var articles: [ArticleMetadata] = []
         var sawArticleSet = false
@@ -43,9 +54,17 @@ public enum PubMedArticleParser {
         private var path: [String] = []
         private var text = ""
         private var current: ArticleMetadata?
+        /// Authors listed on the book rather than the chapter; used only
+        /// when the chapter names none.
+        private var bookAuthors: [ArticleAuthor] = []
+        private var contribution = ArticleDate()
         private var author: ArticleAuthor?
         private var authorIsValid = true
-        private var insideTitle = false
+        private var authorListType = "authors"
+        private var authorListOwner = ""
+        /// The title element whose text is being gathered across inline
+        /// markup (<i>, <sup>) instead of being reset at each child.
+        private var collecting: String?
         private var elocationType: String?
         private var articleIdType: String?
 
@@ -57,17 +76,24 @@ public enum PubMedArticleParser {
             attributes: [String: String] = [:]
         ) {
             path.append(elementName)
-            // Titles carry inline markup (<i>, <sup>): keep collecting text
-            // across those child elements instead of resetting.
-            if insideTitle { return }
+            if collecting != nil { return }
             text = ""
             switch elementName {
             case "PubmedArticleSet":
                 sawArticleSet = true
             case "PubmedArticle":
                 current = ArticleMetadata(pmid: "")
-            case "ArticleTitle" where parent == "Article":
-                insideTitle = true
+            case "PubmedBookArticle":
+                current = ArticleMetadata(pmid: "", kind: .bookChapter)
+                bookAuthors = []
+                contribution = ArticleDate()
+            case "ArticleTitle" where parent == "Article" || parent == "BookDocument":
+                collecting = elementName
+            case "BookTitle" where parent == "Book":
+                collecting = elementName
+            case "AuthorList":
+                authorListType = (attributes["Type"] ?? "authors").lowercased()
+                authorListOwner = parent ?? ""
             case "Author":
                 author = ArticleAuthor()
                 authorIsValid = attributes["ValidYN"] != "N"
@@ -95,17 +121,21 @@ public enum PubMedArticleParser {
             qualifiedName: String?
         ) {
             defer { path.removeLast() }
-            if insideTitle {
-                if elementName == "ArticleTitle" {
-                    current?.title = clean(text)
-                    insideTitle = false
-                    text = ""
+            if let collecting {
+                guard elementName == collecting else { return }
+                let value = nonEmpty(clean(text))
+                switch collecting {
+                case "ArticleTitle": current?.title = value
+                case "BookTitle": current?.bookTitle = value
+                default: break
                 }
+                self.collecting = nil
+                text = ""
                 return
             }
             let value = clean(text)
             switch elementName {
-            case "PMID" where parent == "MedlineCitation":
+            case "PMID" where parent == "MedlineCitation" || parent == "BookDocument":
                 current?.pmid = PubMed.canonicalPMID(value) ?? value
             case "Title" where parent == "Journal":
                 current?.journalTitle = nonEmpty(value)
@@ -119,21 +149,41 @@ public enum PubMedArticleParser {
                 current?.year = nonEmpty(value)
             case "Month" where parent == "PubDate":
                 current?.month = nonEmpty(value)
+            case "Season" where parent == "PubDate":
+                if current?.month == nil { current?.month = nonEmpty(value) }
             case "Day" where parent == "PubDate":
                 current?.day = nonEmpty(value)
             case "MedlineDate" where parent == "PubDate":
                 let parsed = PubMedArticleParser.medlineDate(value)
                 if current?.year == nil { current?.year = parsed.year }
                 if current?.month == nil { current?.month = parsed.month }
+            case "Year" where parent == "ContributionDate":
+                contribution.year = nonEmpty(value)
+            case "Month" where parent == "ContributionDate":
+                contribution.month = nonEmpty(value)
+            case "Day" where parent == "ContributionDate":
+                contribution.day = nonEmpty(value)
             case "MedlinePgn" where parent == "Pagination":
                 current?.pages = nonEmpty(value)
             case "ELocationID" where elocationType == "doi":
                 // PubmedData's ArticleId is authoritative; this is the fallback.
                 if current?.doi == nil { current?.doi = nonEmpty(value) }
+            case "ELocationID" where elocationType == "pii":
+                if current?.articleNumber == nil, PubMedArticleParser.isArticleNumber(value) {
+                    current?.articleNumber = value
+                }
             case "ArticleId" where articleIdType == "doi" && path.suffix(3) == ["PubmedData", "ArticleIdList", "ArticleId"]:
                 // The article's own identifier list. The DOIs of the works it
                 // cites sit under PubmedData/ReferenceList and must not match.
                 if let doi = nonEmpty(value) { current?.doi = doi }
+            case "ArticleId" where articleIdType == "bookaccession" && path.suffix(3) == ["BookDocument", "ArticleIdList", "ArticleId"]:
+                current?.bookshelfID = nonEmpty(value)
+            case "PublisherName" where parent == "Publisher":
+                current?.publisher = nonEmpty(value)
+            case "PublisherLocation" where parent == "Publisher":
+                current?.publisherLocation = nonEmpty(value)
+            case "PublicationType":
+                if let type = nonEmpty(value) { current?.publicationTypes.append(type) }
             case "LastName" where parent == "Author":
                 author?.lastName = nonEmpty(value)
             case "ForeName" where parent == "Author":
@@ -146,11 +196,21 @@ public enum PubMedArticleParser {
                 author?.collectiveName = nonEmpty(value)
             case "Author":
                 if authorIsValid, let author, author.lastName != nil || author.collectiveName != nil {
-                    current?.authors.append(author)
+                    if authorListType == "editors" {
+                        current?.editors.append(author)
+                    } else if authorListOwner == "Book" {
+                        bookAuthors.append(author)
+                    } else {
+                        current?.authors.append(author)
+                    }
                 }
                 author = nil
-            case "PubmedArticle":
-                if let current, !current.pmid.isEmpty { articles.append(current) }
+            case "PubmedArticle", "PubmedBookArticle":
+                if var finished = current, !finished.pmid.isEmpty {
+                    if finished.authors.isEmpty { finished.authors = bookAuthors }
+                    if contribution.year != nil { finished.contributionDate = contribution }
+                    articles.append(finished)
+                }
                 current = nil
             default:
                 break

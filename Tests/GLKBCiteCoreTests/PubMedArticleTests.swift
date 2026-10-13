@@ -116,6 +116,103 @@ final class PubMedArticleTests: XCTestCase {
         ])
     }
 
+    func testParserReadsBookshelfChaptersSeasonsLocatorsAndPublicationTypes() throws {
+        let xml = """
+        <?xml version="1.0"?>
+        <PubmedArticleSet>
+          <PubmedBookArticle>
+            <BookDocument>
+              <PMID Version="1">42862929</PMID>
+              <ArticleIdList><ArticleId IdType="bookaccession">NBK625318</ArticleId></ArticleIdList>
+              <Book>
+                <Publisher>
+                  <PublisherName>University of Washington, Seattle</PublisherName>
+                  <PublisherLocation>Seattle (WA)</PublisherLocation>
+                </Publisher>
+                <BookTitle book="gene">GeneReviews<sup>&#xAE;</sup></BookTitle>
+                <PubDate><Year>1993</Year></PubDate>
+                <AuthorList Type="editors"><Author ValidYN="Y"><LastName>Adam</LastName><ForeName>Margaret P</ForeName><Initials>MP</Initials></Author></AuthorList>
+                <AuthorList Type="authors"><Author ValidYN="Y"><LastName>Bookwide</LastName><ForeName>Author</ForeName><Initials>A</Initials></Author></AuthorList>
+                <Medium>Internet</Medium>
+              </Book>
+              <ArticleTitle book="gene" part="cerd">Ceramide Transporter Syndrome</ArticleTitle>
+              <AuthorList Type="authors"><Author ValidYN="Y"><LastName>Regan-Fendt</LastName><ForeName>Kelly</ForeName><Initials>K</Initials></Author></AuthorList>
+              <PublicationType UI="D016454">Review</PublicationType>
+              <ContributionDate><Year>2026</Year><Month>10</Month><Day>8</Day></ContributionDate>
+              <ReferenceList><Reference><Citation>Cited work</Citation><ArticleIdList><ArticleId IdType="doi">10.9999/cited</ArticleId></ArticleIdList></Reference></ReferenceList>
+            </BookDocument>
+            <PubmedBookData><ArticleIdList><ArticleId IdType="pubmed">42862929</ArticleId></ArticleIdList></PubmedBookData>
+          </PubmedBookArticle>
+          <PubmedArticle>
+            <MedlineCitation Status="MEDLINE"><PMID Version="1">38206862</PMID>
+              <Article>
+                <Journal><ISOAbbreviation>Elife</ISOAbbreviation><Title>eLife</Title>
+                  <JournalIssue><Volume>12</Volume><PubDate><Year>1965</Year><Season>Nov-Dec</Season></PubDate></JournalIssue></Journal>
+                <ArticleTitle>Frogs.</ArticleTitle>
+                <ELocationID EIdType="pii" ValidYN="Y">e85096</ELocationID>
+                <ELocationID EIdType="doi" ValidYN="Y">10.7554/eLife.85096</ELocationID>
+                <AuthorList><Author ValidYN="Y"><LastName>Jr</LastName><ForeName>Fedor Čiampor</ForeName><Initials>FČ</Initials></Author></AuthorList>
+                <PublicationTypeList><PublicationType>Journal Article</PublicationType><PublicationType>Retracted Publication</PublicationType></PublicationTypeList>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+          <PubmedArticle>
+            <MedlineCitation Status="PubMed-not-MEDLINE"><PMID Version="1">42859506</PMID>
+              <Article>
+                <Journal><ISOAbbreviation>ArXiv</ISOAbbreviation><Title>ArXiv</Title><JournalIssue><PubDate><Year>2026</Year><Month>Oct</Month><Day>02</Day></PubDate></JournalIssue></Journal>
+                <ArticleTitle>Autoencoders.</ArticleTitle>
+                <ELocationID EIdType="pii" ValidYN="Y">arXiv:2610.03640v1</ELocationID>
+                <ELocationID EIdType="pii" ValidYN="Y">d6ra03309a</ELocationID>
+                <PublicationTypeList><PublicationType>Preprint</PublicationType></PublicationTypeList>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+        </PubmedArticleSet>
+        """
+        let articles = try PubMedArticleParser.parse(Data(xml.utf8))
+        XCTAssertEqual(articles.map(\.pmid), ["42862929", "38206862", "42859506"])
+
+        let chapter = articles[0]
+        XCTAssertEqual(chapter.kind, .bookChapter)
+        XCTAssertEqual(chapter.title, "Ceramide Transporter Syndrome")
+        XCTAssertEqual(chapter.bookTitle, "GeneReviews\u{AE}")
+        XCTAssertEqual(chapter.publisher, "University of Washington, Seattle")
+        XCTAssertEqual(chapter.publisherLocation, "Seattle (WA)")
+        XCTAssertEqual(chapter.year, "1993")
+        XCTAssertEqual(chapter.bookshelfID, "NBK625318")
+        XCTAssertEqual(chapter.bookshelfURL?.absoluteString, "https://www.ncbi.nlm.nih.gov/books/NBK625318/")
+        XCTAssertEqual(chapter.authors, [ArticleAuthor(lastName: "Regan-Fendt", foreName: "Kelly", initials: "K")],
+                       "chapter authors win over the book's authors")
+        XCTAssertEqual(chapter.editors, [ArticleAuthor(lastName: "Adam", foreName: "Margaret P", initials: "MP")])
+        XCTAssertEqual(chapter.publicationTypes, ["Review"])
+        XCTAssertEqual(chapter.contributionDate, ArticleDate(year: "2026", month: "10", day: "8"))
+        XCTAssertNil(chapter.doi, "a cited work's DOI is not the chapter's")
+
+        let elife = articles[1]
+        XCTAssertEqual(elife.month, "Nov-Dec")
+        XCTAssertEqual(elife.articleNumber, "e85096")
+        XCTAssertEqual(elife.doi, "10.7554/eLife.85096")
+        XCTAssertTrue(elife.isRetracted)
+        XCTAssertFalse(elife.isPreprint)
+
+        let preprint = articles[2]
+        XCTAssertEqual(preprint.articleNumber, "arXiv:2610.03640v1", "a publisher's internal pii is not an article number")
+        XCTAssertTrue(preprint.isPreprint)
+        XCTAssertFalse(preprint.isRetracted)
+        XCTAssertNil(preprint.bookshelfURL)
+    }
+
+    func testArticleNumberRecognition() {
+        XCTAssertTrue(PubMedArticleParser.isArticleNumber("e85096"))
+        XCTAssertTrue(PubMedArticleParser.isArticleNumber("E0261090"))
+        XCTAssertTrue(PubMedArticleParser.isArticleNumber("arXiv:2610.03640v1"))
+        XCTAssertTrue(PubMedArticleParser.isArticleNumber("2461"))
+        XCTAssertFalse(PubMedArticleParser.isArticleNumber("d6ra03309a"))
+        XCTAssertFalse(PubMedArticleParser.isArticleNumber("10.1177_09727531261479841"))
+        XCTAssertFalse(PubMedArticleParser.isArticleNumber("S0140-6736(20)30925-9"))
+        XCTAssertFalse(PubMedArticleParser.isArticleNumber("12"))
+    }
+
     func testParserRejectsNonXMLAndForeignXML() {
         XCTAssertThrowsError(try PubMedArticleParser.parse(Data("<html><body>captive portal</body></html>".utf8)))
         XCTAssertThrowsError(try PubMedArticleParser.parse(Data("{\"status\":\"ok\"}".utf8)))

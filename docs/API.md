@@ -102,6 +102,32 @@ issue, `PubDate` (or `MedlineDate`), `MedlinePgn`, and the DOI (the
 for GLKB: redirects refused, host checked, TLS 1.2, XML content type required,
 8 MiB cap. Records are cached in memory for the life of the process.
 
+Record shapes the client handles beyond the ordinary journal article, each
+verified against live records:
+
+- **Bookshelf chapters** (`PubmedBookArticle`: StatPearls, GeneReviews) are
+  cited as chapters: book title, editors, publisher and place, the chapter's
+  last-revision date (NLM) and its Bookshelf URL from `bookaccession`.
+- **Epub ahead of print** records with no volume or pages cite the date and
+  DOI only; **article e-numbers** (`ELocationID` `pii` such as `e85096`, or a
+  pagination of that form) take the page position, and APA labels them
+  "Article …"; **arXiv identifiers** are printed bare.
+- **Seasons and ranges** in `PubDate` ("Nov-Dec", "Spring") are kept as
+  written; `MedlineDate` is split into year and remainder.
+- **Retracted publications** and **preprints** are detected from
+  `PublicationType`; the Cite modal warns, BibTeX and RIS carry a note, and
+  Vancouver prints "[Preprint]".
+- **Group authors** (`CollectiveName`) are cited verbatim; a `LastName` that
+  is only a suffix with a two-token `ForeName` (a known PubMed data error) is
+  repaired; "[No authors listed]" and "et al" entries are ignored.
+- The disambiguating qualifier in some NLM titles ("Lancet (London,
+  England)") is dropped from prose citations; DOIs containing `<` or `>`
+  are percent-encoded in `https://doi.org/…` links.
+
+Shapes not covered: records with neither a `PubmedArticle` nor a
+`PubmedBookArticle` body, and PMIDs PubMed does not know; both fall back to
+GLKB's own fields with the footer saying so.
+
 ## Errors
 
 - `401`: missing or invalid key
