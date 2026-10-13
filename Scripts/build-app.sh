@@ -178,7 +178,9 @@ xattr -cr "$APP_PATH"
 sign_sparkle_component() {
     local component="$1"
     if [[ "$SIGNING_IDENTITY" == "-" ]]; then
-        codesign --force --options runtime --preserve-metadata=entitlements \
+        # Ad-hoc signatures carry no Team ID, so Hardened Runtime library
+        # validation would refuse to load the embedded Sparkle framework.
+        codesign --force --preserve-metadata=entitlements \
             --sign "$SIGNING_IDENTITY" "$component"
     else
         codesign --force --options runtime --timestamp --preserve-metadata=entitlements \
@@ -193,7 +195,7 @@ sign_sparkle_component "$UPDATER_APP"
 sign_sparkle_component "$SPARKLE_FRAMEWORK"
 
 if [[ "$SIGNING_IDENTITY" == "-" ]]; then
-    codesign --force --options runtime \
+    codesign --force \
         --entitlements "$PROJECT_DIR/Resources/GLKBCite.entitlements" \
         --sign "$SIGNING_IDENTITY" "$APP_PATH"
 else
