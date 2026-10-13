@@ -49,6 +49,9 @@ public final class AppCoordinator: ObservableObject {
     /// the prefix, never any part of the secret.
     @Published public private(set) var maskedStoredAPIKey: String?
     @Published public private(set) var citeReference: LiteratureReference?
+    /// Whether the Cite modal's citations carry PubMed's volume, pages and
+    /// DOI yet, or why they do not.
+    @Published public private(set) var citeDetailStatus: CiteDetailStatus = .idle
     @Published public private(set) var toastMessage: String?
     /// Whether the results panel is on screen. Cards drop transient hover
     /// state when it goes away, so a hover does not stick until the next show.
@@ -102,6 +105,10 @@ public final class AppCoordinator: ObservableObject {
     /// Built once per credential and reused across queries so the URLSession
     /// (and its connections) survive between searches.
     private var cachedBackend: (credentialScope: String, backend: any LiteratureBackend)?
+    private let articleService = PubMedArticleService()
+    /// PubMed records by PMID, for the life of the process.
+    private var articleMetadataCache: [String: ArticleMetadata] = [:]
+    private var articleFetchTask: Task<Void, Never>?
     private var credentialScope = "missing"
 
     /// Non-singleton instances exist for tests. They must not touch the panel
@@ -202,6 +209,8 @@ public final class AppCoordinator: ObservableObject {
         selectionCaptureTask?.cancel()
         selectionCaptureTask = nil
         candidateExpiryTask?.cancel()
+        articleFetchTask?.cancel()
+        articleFetchTask = nil
         automaticSelectionMonitor.stop()
         automaticCandidate = nil
         hotKeyManager.unregister()
@@ -311,13 +320,62 @@ public final class AppCoordinator: ObservableObject {
     // MARK: Cite modal and toast
 
     public func presentCite(_ reference: LiteratureReference) {
-        citeReference = reference
+        var presented = reference
+        if let cached = articleMetadataCache[reference.pmid] {
+            presented.article = cached
+            citeDetailStatus = .fromPubMed
+        } else {
+            citeDetailStatus = .loading
+        }
+        citeReference = presented
         citePanelController.show(over: resultPanelController.frame)
+        if presented.article == nil {
+            fetchArticleDetails(for: reference.pmid)
+        }
     }
 
     public func dismissCite() {
+        articleFetchTask?.cancel()
+        articleFetchTask = nil
+        citeDetailStatus = .idle
         citeReference = nil
         citePanelController.hide()
+    }
+
+    /// Fetches PubMed's record for the cited reference and, in the same
+    /// request, for every other reference on screen, so later Cite clicks on
+    /// this result are instant. Only PMIDs leave the Mac.
+    private func fetchArticleDetails(for pmid: String) {
+        articleFetchTask?.cancel()
+        var pmids = [pmid]
+        for reference in result?.references ?? []
+        where reference.pmid != pmid && articleMetadataCache[reference.pmid] == nil {
+            pmids.append(reference.pmid)
+        }
+        let service = articleService
+        articleFetchTask = Task { @MainActor [weak self] in
+            let outcome: Result<[String: ArticleMetadata], Error>
+            do {
+                outcome = .success(try await service.articles(for: pmids))
+            } catch {
+                outcome = .failure(error)
+            }
+            guard let self, !Task.isCancelled else { return }
+            switch outcome {
+            case .success(let articles):
+                articleMetadataCache.merge(articles) { _, fetched in fetched }
+                guard citeReference?.pmid == pmid else { return }
+                if let article = articles[pmid] {
+                    citeReference?.article = article
+                    citeDetailStatus = .fromPubMed
+                } else {
+                    citeDetailStatus = .unavailable("PubMed has no record for PMID \(pmid).")
+                }
+            case .failure(let error):
+                guard citeReference?.pmid == pmid else { return }
+                citeDetailStatus = .unavailable(error.localizedDescription)
+            }
+        }
     }
 
     public func showToast(_ message: String) {
@@ -709,6 +767,7 @@ public final class AppCoordinator: ObservableObject {
         failureKind: FailureKind? = nil,
         progressStep: String = "",
         citeReference: LiteratureReference? = nil,
+        citeDetailStatus: CiteDetailStatus = .idle,
         toastMessage: String? = nil
     ) {
         self.phase = phase
@@ -718,6 +777,7 @@ public final class AppCoordinator: ObservableObject {
         self.failureKind = failureKind
         self.progressStep = progressStep
         self.citeReference = citeReference
+        self.citeDetailStatus = citeDetailStatus
         self.toastMessage = toastMessage
     }
 #endif
@@ -728,4 +788,14 @@ public final class AppCoordinator: ObservableObject {
             .map { String(format: "%02x", $0) }
             .joined()
     }
+}
+
+/// State of the PubMed detail fetch behind the Cite modal.
+public enum CiteDetailStatus: Equatable, Sendable {
+    case idle
+    case loading
+    /// Citations include PubMed's volume, issue, pages, DOI and author names.
+    case fromPubMed
+    /// Citations use GLKB's fields only; the text says why.
+    case unavailable(String)
 }

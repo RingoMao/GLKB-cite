@@ -17,13 +17,21 @@ the app (`GLKBCiteMac`), its build number, and the CFNetwork and macOS
 versions. No account name, device identifier, or other data is sent. The app
 refuses to follow HTTP redirects, so the text can only reach the host above.
 
+**Citation details.** When you open *Cite* for a reference, the PubMed
+identifiers (PMIDs) of the references currently on screen, and nothing else,
+are sent over HTTPS to NCBI's E-utilities (`eutils.ncbi.nlm.nih.gov`), PubMed's
+official API, to fetch the article's volume, issue, pages, DOI, journal
+abbreviation and author names. The request carries no API key and no selected
+text; NCBI's own privacy policy applies to it. The fetched records are kept in
+memory until the app quits.
+
 **Update checks.** Release builds that ship with an update feed contact that
 feed over HTTPS at launch and periodically to look for a newer version
 (Sparkle). Those requests carry the app version and macOS version; they are
 not linked to you. Test builds have no feed and never check for updates.
 
-Nothing else connects to the network. PubMed links open in your browser only
-when you click them.
+Nothing else connects to the network. PubMed and DOI links open in your
+browser only when you click them.
 
 ## What stays on your Mac
 

@@ -101,7 +101,11 @@ while it remains open. Press **Esc** or click **✕** to close it.
 - Hover over a reference (or Tab to it with Full Keyboard Access) and click
   **Cite** to get MLA 9, APA 7, Chicago (notes-bibliography), Harvard and
   Vancouver (NLM) renderings — click any of them to copy it — plus **BibTeX**
-  and **EndNote** (RIS) exports.
+  and **EndNote** (RIS) exports. The modal fetches the article's volume,
+  issue, pages, DOI and author names from PubMed (only the PMIDs are sent)
+  and re-renders when they arrive; the footer says whether they did. Without
+  a network connection the citations use GLKB's title, authors, journal and
+  year only.
 - **Copy Plain Text** and **Copy Rich Report** copy the whole result list for
   pasting into notes or a document.
 

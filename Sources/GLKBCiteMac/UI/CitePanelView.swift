@@ -5,6 +5,8 @@ import SwiftUI
 /// Content of the 460pt "Cite" modal: one box per citation style (click to
 /// copy), BibTeX / EndNote exports, and the confirmation toast. Copying keeps
 /// the modal open, as in the mockup; ✕, Escape, or the dimmed panel close it.
+/// The citations re-render as soon as PubMed's volume, pages and DOI arrive;
+/// the footer says whether they have.
 struct CitePanelView: View {
     @EnvironmentObject private var coordinator: AppCoordinator
 
@@ -82,6 +84,10 @@ struct CitePanelView: View {
                 .buttonStyle(OutlineButtonStyle())
 
                 Spacer()
+
+                detailStatus
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
             }
             .padding(EdgeInsets(top: 14, leading: 20, bottom: 18, trailing: 20))
         }
@@ -93,6 +99,24 @@ struct CitePanelView: View {
             RoundedRectangle(cornerRadius: Theme.windowCornerRadius)
                 .strokeBorder(Theme.hairline)
         )
+    }
+
+    @ViewBuilder
+    private var detailStatus: some View {
+        switch coordinator.citeDetailStatus {
+        case .idle:
+            EmptyView()
+        case .loading:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Fetching details from PubMed…")
+            }
+        case .fromPubMed:
+            Text("Volume, pages and DOI from PubMed")
+        case .unavailable(let reason):
+            Text("PubMed details unavailable; GLKB data only")
+                .help(reason)
+        }
     }
 
     private func copy(_ text: String) {

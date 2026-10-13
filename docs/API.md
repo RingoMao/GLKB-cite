@@ -86,6 +86,22 @@ Reference normalisation:
 - JSON booleans are never treated as text or numbers.
 - At most 500 raw entries are scanned for the five usable references.
 
+## PubMed metadata (NCBI E-utilities)
+
+The Cite modal completes each citation from PubMed's official API:
+
+`GET https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=<pmid,pmid,…>&retmode=xml&tool=glkb-cite`
+
+One request per modal carries the PMIDs of every reference on screen (at most
+50); nothing else is sent, no key is needed, and NCBI's limit of three
+requests per second is never approached. The `PubmedArticleSet` XML is parsed
+for the title, structured authors (`LastName`, `ForeName`, `Initials`,
+`Suffix`, `CollectiveName`), journal title and `ISOAbbreviation`, volume,
+issue, `PubDate` (or `MedlineDate`), `MedlinePgn`, and the DOI (the
+`ArticleIdList` entry, else `ELocationID`). The same transport rules apply as
+for GLKB: redirects refused, host checked, TLS 1.2, XML content type required,
+8 MiB cap. Records are cached in memory for the life of the process.
+
 ## Errors
 
 - `401`: missing or invalid key
