@@ -227,6 +227,48 @@ final class CitationFormatterTests: XCTestCase {
         XCTAssertEqual(cite(bare, .vancouver), "Bare title. PMID: 999.")
     }
 
+    // MARK: Italics
+
+    func testJournalTitlesAreItalicWhereStylesRequire() {
+        for style in [CitationFormatter.Style.mla, .apa, .chicago, .harvard] {
+            let formatted = CitationFormatter.formattedCitation(for: reference, style: style, accessDate: accessed)
+            XCTAssertEqual(formatted.plainText, cite(reference, style), style.rawValue)
+            XCTAssertTrue(formatted.runs.contains { $0.isItalic && $0.text == "Cell Reports Medicine" }, style.rawValue)
+            XCTAssertFalse(formatted.runs.contains { $0.isItalic && $0.text.contains("Type I interferon") }, style.rawValue)
+        }
+        let vancouver = CitationFormatter.formattedCitation(for: reference, style: .vancouver, accessDate: accessed)
+        XCTAssertFalse(vancouver.runs.contains(where: \.isItalic))
+        XCTAssertEqual(vancouver.plainText, cite(reference, .vancouver))
+    }
+
+    func testMLAItalicisesTheDatabaseName() {
+        let mla = CitationFormatter.formattedCitation(for: reference, style: .mla, accessDate: accessed)
+        XCTAssertTrue(mla.runs.contains { $0.isItalic && $0.text == "PubMed" })
+        XCTAssertTrue(mla.html.hasSuffix(
+            "<i>Cell Reports Medicine</i>, 2024. <i>PubMed</i>, https://pubmed.ncbi.nlm.nih.gov/38291045/."
+        ))
+    }
+
+    func testFormattedCitationRenderings() {
+        let apa = CitationFormatter.formattedCitation(for: reference, style: .apa, accessDate: accessed)
+        XCTAssertTrue(apa.html.contains("Type I interferon signaling precedes islet autoimmunity. <i>Cell Reports Medicine</i>. https://"))
+        XCTAssertEqual(String(apa.attributedString.characters), apa.plainText)
+        let italicRuns = apa.attributedString.runs
+            .filter { $0.inlinePresentationIntent == .emphasized }
+            .map { String(apa.attributedString[$0.range].characters) }
+        XCTAssertEqual(italicRuns, ["Cell Reports Medicine"])
+
+        var ampersand = reference
+        ampersand.journal = "Science & Medicine"
+        XCTAssertTrue(
+            CitationFormatter.formattedCitation(for: ampersand, style: .harvard, accessDate: accessed).html
+                .contains("<i>Science &amp; Medicine</i>")
+        )
+
+        let merged = FormattedCitation(runs: [.init(text: "a"), .init(text: ""), .init(text: "b"), .init(text: "c", isItalic: true)])
+        XCTAssertEqual(merged.runs, [.init(text: "ab"), .init(text: "c", isItalic: true)])
+    }
+
     // MARK: Exports
 
     func testBibTeXEntry() {
@@ -411,6 +453,20 @@ final class CitationFormatterTests: XCTestCase {
             cite(nature, .vancouver),
             "Caelles C, Helmberg A, Karin M. \(title). Nature. 1994 Jul 21;370(6486):220-3. doi: 10.1038/370220a0. PMID: 8028670."
         )
+    }
+
+    func testItalicsCoverJournalsAndAPAVolumesWithPubMedData() {
+        let apa = CitationFormatter.formattedCitation(for: nature, style: .apa, accessDate: accessed)
+        XCTAssertTrue(apa.html.hasSuffix("<i>Nature</i>, <i>370</i>(6486), 220\u{2013}223. https://doi.org/10.1038/370220a0"), apa.html)
+        let mla = CitationFormatter.formattedCitation(for: nature, style: .mla, accessDate: accessed)
+        XCTAssertTrue(mla.html.contains("<i>Nature</i>, vol. 370, no. 6486, 1994, pp. 220\u{2013}23, https://doi.org/"), mla.html)
+        XCTAssertFalse(mla.runs.contains { $0.isItalic && $0.text == "PubMed" }, "the DOI replaces the database container")
+        let chicago = CitationFormatter.formattedCitation(for: nature, style: .chicago, accessDate: accessed)
+        XCTAssertTrue(chicago.html.contains("<i>Nature</i> 370, no. 6486 (1994): 220\u{2013}23."), chicago.html)
+        let harvard = CitationFormatter.formattedCitation(for: nature, style: .harvard, accessDate: accessed)
+        XCTAssertTrue(harvard.html.contains("<i>Nature</i>, 370(6486), pp. 220\u{2013}223."), harvard.html)
+        let vancouver = CitationFormatter.formattedCitation(for: nature, style: .vancouver, accessDate: accessed)
+        XCTAssertFalse(vancouver.runs.contains(where: \.isItalic))
     }
 
     func testFullForenamesJournalCaseAndArticleNumbers() {

@@ -45,112 +45,131 @@ public enum CitationFormatter {
         style: Style,
         accessDate: Date = Date()
     ) -> String {
+        formattedCitation(for: reference, style: style, accessDate: accessDate).plainText
+    }
+
+    /// The citation as styled runs. Journal titles are italic in MLA, APA,
+    /// Chicago and Harvard, as are APA's volume numbers and the PubMed
+    /// database name in MLA's second container; article titles stay roman in
+    /// every style, and Vancouver uses no italics at all.
+    public static func formattedCitation(
+        for reference: LiteratureReference,
+        style: Style,
+        accessDate: Date = Date()
+    ) -> FormattedCitation {
         let record = CitationRecord(reference)
+        let runs: Runs
         switch style {
-        case .mla: return mla(record)
-        case .apa: return apa(record)
-        case .chicago: return chicago(record)
-        case .harvard: return harvard(record, accessDate: accessDate)
-        case .vancouver: return vancouver(record)
+        case .mla: runs = mla(record)
+        case .apa: runs = apa(record)
+        case .chicago: runs = chicago(record)
+        case .harvard: runs = harvard(record, accessDate: accessDate)
+        case .vancouver: runs = vancouver(record)
         }
+        return FormattedCitation(runs: runs)
     }
 
     // MARK: - Styles
 
     /// MLA 9: Author. "Title." Journal, vol. V, no. I, Year, pp. P, DOI.
     /// Without a DOI the database and its URL form a second container.
-    private static func mla(_ record: CitationRecord) -> String {
-        var parts: [String] = []
-        if let head = authorBlock(record.authors, style: .mla) { parts.append(head) }
-        parts.append("\u{201C}\(record.titleSentence)\u{201D}")
+    private static func mla(_ record: CitationRecord) -> Runs {
+        var parts: [Runs] = []
+        if let head = authorBlock(record.authors, style: .mla) { parts.append(plain(head)) }
+        parts.append(plain("\u{201C}\(record.titleSentence)\u{201D}"))
 
-        var container: [String] = []
-        if !record.journal.isEmpty { container.append(record.journal) }
-        if !record.volume.isEmpty { container.append("vol. \(record.volume)") }
-        if !record.issue.isEmpty { container.append("no. \(record.issue)") }
-        if !record.year.isEmpty { container.append(record.year) }
+        var container: [Runs] = []
+        if !record.journal.isEmpty { container.append(italic(record.journal)) }
+        if !record.volume.isEmpty { container.append(plain("vol. \(record.volume)")) }
+        if !record.issue.isEmpty { container.append(plain("no. \(record.issue)")) }
+        if !record.year.isEmpty { container.append(plain(record.year)) }
         if let pages = record.pages {
-            container.append(pages.isRange ? "pp. \(pages.abbreviated)" : "p. \(pages.start)")
+            container.append(plain(pages.isRange ? "pp. \(pages.abbreviated)" : "p. \(pages.start)"))
         }
         if let doi = record.doiURL {
-            container.append(doi.absoluteString)
-            parts.append(container.joined(separator: ", ") + ".")
+            container.append(plain(doi.absoluteString))
+            parts.append(joined(container, separator: ", ") + plain("."))
         } else {
-            if !container.isEmpty { parts.append(container.joined(separator: ", ") + ".") }
+            if !container.isEmpty { parts.append(joined(container, separator: ", ") + plain(".")) }
             if let url = record.pubmedURL {
-                parts.append("PubMed, \(url.absoluteString).")
+                parts.append(italic("PubMed") + plain(", \(url.absoluteString)."))
             } else if let url = record.fallbackURL {
-                parts.append("\(url.absoluteString).")
+                parts.append(plain("\(url.absoluteString)."))
             }
         }
-        return parts.joined(separator: " ")
+        return joined(parts, separator: " ")
     }
 
     /// APA 7: Author, A. A., & Author, B. B. (Year). Title. Journal, V(I),
     /// pages. https://doi.org/…
-    private static func apa(_ record: CitationRecord) -> String {
+    private static func apa(_ record: CitationRecord) -> Runs {
         let date = record.year.isEmpty ? "n.d." : record.year
-        var parts: [String] = []
+        var parts: [Runs] = []
         if let head = authorBlock(record.authors, style: .apa) {
-            parts += [head, "(\(date)).", record.titleSentence]
+            parts += [plain(head), plain("(\(date))."), plain(record.titleSentence)]
         } else {
-            parts += [record.titleSentence, "(\(date))."]
+            parts += [plain(record.titleSentence), plain("(\(date)).")]
         }
-        var source: [String] = []
-        if !record.journal.isEmpty { source.append(record.journal) }
-        if !record.volume.isEmpty { source.append(record.volumeWithIssue) }
-        if let pages = record.pages { source.append(pages.full) }
-        if !source.isEmpty { parts.append(source.joined(separator: ", ") + ".") }
-        if let url = record.locatorURL { parts.append(url.absoluteString) }
-        return parts.joined(separator: " ")
+        var source: [Runs] = []
+        if !record.journal.isEmpty { source.append(italic(record.journal)) }
+        if !record.volume.isEmpty {
+            // APA italicises the volume but not the issue in parentheses.
+            source.append(italic(record.volume) + (record.issue.isEmpty ? [] : plain("(\(record.issue))")))
+        }
+        if let pages = record.pages { source.append(plain(pages.full)) }
+        if !source.isEmpty { parts.append(joined(source, separator: ", ") + plain(".")) }
+        if let url = record.locatorURL { parts.append(plain(url.absoluteString)) }
+        return joined(parts, separator: " ")
     }
 
     /// Chicago 17 bibliography: Author, A., B. Author, and C. Author.
     /// "Title." Journal V, no. I (Year): pages. https://doi.org/….
-    private static func chicago(_ record: CitationRecord) -> String {
-        var parts: [String] = []
-        if let head = authorBlock(record.authors, style: .chicago) { parts.append(head) }
-        parts.append("\u{201C}\(record.titleSentence)\u{201D}")
+    private static func chicago(_ record: CitationRecord) -> Runs {
+        var parts: [Runs] = []
+        if let head = authorBlock(record.authors, style: .chicago) { parts.append(plain(head)) }
+        parts.append(plain("\u{201C}\(record.titleSentence)\u{201D}"))
         if !record.volume.isEmpty {
-            var source = record.journal.isEmpty ? record.volume : "\(record.journal) \(record.volume)"
-            if !record.issue.isEmpty { source += ", no. \(record.issue)" }
-            if !record.year.isEmpty { source += " (\(record.year))" }
-            if let pages = record.pages { source += ": \(pages.abbreviated)" }
-            parts.append(source + ".")
-        } else {
-            parts += container(record.journal, record.year, separator: ", ", undated: "n.d.")
+            var source = record.journal.isEmpty ? plain(record.volume) : italic(record.journal) + plain(" \(record.volume)")
+            if !record.issue.isEmpty { source += plain(", no. \(record.issue)") }
+            if !record.year.isEmpty { source += plain(" (\(record.year))") }
+            if let pages = record.pages { source += plain(": \(pages.abbreviated)") }
+            parts.append(source + plain("."))
+        } else if let source = container(record.journal, record.year, separator: ", ", undated: "n.d.", italicJournal: true) {
+            parts.append(source)
         }
-        if let url = record.locatorURL { parts.append("\(url.absoluteString).") }
-        return parts.joined(separator: " ")
+        if let url = record.locatorURL { parts.append(plain("\(url.absoluteString).")) }
+        return joined(parts, separator: " ")
     }
 
     /// Harvard (Cite Them Right): Author, A., Author, B. and Author, C.
     /// (Year) 'Title', Journal, V(I), pp. pages. Available at: URL
     /// (Accessed: Day Month Year).
-    private static func harvard(_ record: CitationRecord, accessDate: Date) -> String {
+    private static func harvard(_ record: CitationRecord, accessDate: Date) -> Runs {
         let date = record.year.isEmpty ? "no date" : record.year
         let quotedTitle = "\u{2018}\(record.title)\u{2019}"
-        var source: [String] = []
-        if !record.journal.isEmpty { source.append(record.journal) }
-        if !record.volume.isEmpty { source.append(record.volumeWithIssue) }
+        var source: [Runs] = []
+        if !record.journal.isEmpty { source.append(italic(record.journal)) }
+        if !record.volume.isEmpty { source.append(plain(record.volumeWithIssue)) }
         if let pages = record.pages {
-            source.append(pages.isRange ? "pp. \(pages.full)" : "p. \(pages.start)")
+            source.append(plain(pages.isRange ? "pp. \(pages.full)" : "p. \(pages.start)"))
         }
-        var head: String
+        var runs: Runs
         if let authorsText = authorBlock(record.authors, style: .harvard) {
-            head = "\(authorsText) (\(date)) \(quotedTitle)"
-            head += source.isEmpty ? record.titleStop : ", \(source.joined(separator: ", "))."
+            runs = plain("\(authorsText) (\(date)) \(quotedTitle)")
+            runs += source.isEmpty ? plain(record.titleStop) : plain(", ") + joined(source, separator: ", ") + plain(".")
         } else {
-            head = "\(quotedTitle) (\(date))"
-            head += source.isEmpty ? "." : " \(source.joined(separator: ", "))."
+            runs = plain("\(quotedTitle) (\(date))")
+            runs += source.isEmpty ? plain(".") : plain(" ") + joined(source, separator: ", ") + plain(".")
         }
-        guard let url = record.locatorURL else { return head }
-        return "\(head) Available at: \(url.absoluteString) (Accessed: \(harvardDate(accessDate)))."
+        if let url = record.locatorURL {
+            runs += plain(" Available at: \(url.absoluteString) (Accessed: \(harvardDate(accessDate))).")
+        }
+        return runs
     }
 
     /// Vancouver / NLM: Author AA, Author BB. Title. J Abbrev. Year Mon
     /// Day;V(I):pages. doi: …. PMID: n.
-    private static func vancouver(_ record: CitationRecord) -> String {
+    private static func vancouver(_ record: CitationRecord) -> Runs {
         var parts: [String] = []
         if let head = authorBlock(record.authors, style: .vancouver) { parts.append(head) }
         parts.append(record.titleSentence)
@@ -168,7 +187,7 @@ public enum CitationFormatter {
         if !source.isEmpty { parts.append("\(source).") }
         if !record.doi.isEmpty { parts.append("doi: \(record.doi).") }
         if !record.pmid.isEmpty { parts.append("PMID: \(record.pmid).") }
-        return parts.joined(separator: " ")
+        return plain(parts.joined(separator: " "))
     }
 
     // MARK: - Exports
@@ -313,20 +332,39 @@ public enum CitationFormatter {
         return text.hasSuffix(".") ? text : "\(text)."
     }
 
-    /// Journal and year as one element, in the style's punctuation, or
-    /// nothing when both are missing. `undated` is the placeholder a style
-    /// uses for a journal without a year ("n.d."), nil to omit the year.
+    /// Journal and year as one element, in the style's punctuation, or nil
+    /// when both are missing. `undated` is the placeholder a style uses for
+    /// a journal without a year ("n.d."), nil to omit the year; the journal
+    /// is italic where the style sets it so.
     private static func container(
-        _ journal: String, _ year: String, separator: String, undated: String?
-    ) -> [String] {
+        _ journal: String, _ year: String, separator: String, undated: String?, italicJournal: Bool
+    ) -> Runs? {
+        let journalRuns = italicJournal ? italic(journal) : plain(journal)
         switch (journal.isEmpty, year.isEmpty) {
-        case (false, false): return ["\(journal)\(separator)\(year)."]
+        case (false, false): return journalRuns + plain("\(separator)\(year).")
         case (false, true):
-            guard let undated else { return ["\(journal)."] }
-            return ["\(journal)\(separator)\(undated)\(undated.hasSuffix(".") ? "" : ".")"]
-        case (true, false): return ["\(year)."]
-        case (true, true): return []
+            guard let undated else { return journalRuns + plain(".") }
+            return journalRuns + plain("\(separator)\(undated)\(undated.hasSuffix(".") ? "" : ".")")
+        case (true, false): return plain("\(year).")
+        case (true, true): return nil
         }
+    }
+
+    // MARK: - Styled runs
+
+    private typealias Runs = [FormattedCitation.Run]
+
+    private static func plain(_ text: String) -> Runs { [FormattedCitation.Run(text: text, isItalic: false)] }
+    private static func italic(_ text: String) -> Runs { [FormattedCitation.Run(text: text, isItalic: true)] }
+
+    /// Joins the parts of a citation with `separator`.
+    private static func joined(_ parts: [Runs], separator: String) -> Runs {
+        var result: Runs = []
+        for (index, part) in parts.enumerated() {
+            if index > 0 { result += plain(separator) }
+            result += part
+        }
+        return result
     }
 
     // MARK: - Pieces

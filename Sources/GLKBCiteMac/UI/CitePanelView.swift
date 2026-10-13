@@ -48,6 +48,7 @@ struct CitePanelView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(CitationFormatter.Style.allCases, id: \.rawValue) { style in
+                        let citation = CitationFormatter.formattedCitation(for: reference, style: style)
                         Text(style.rawValue)
                             .font(.system(size: 12.5, weight: .bold))
                             .padding(.top, style == CitationFormatter.Style.allCases.first ? 0 : 8)
@@ -55,11 +56,8 @@ struct CitePanelView: View {
                             // variant (e.g. Chicago notes-bibliography) is a tooltip.
                             .help(style.longName)
                             .accessibilityLabel(style.longName)
-                        FormatBox(
-                            label: "\(style.longName) citation",
-                            text: CitationFormatter.citation(for: reference, style: style)
-                        ) {
-                            copy(CitationFormatter.citation(for: reference, style: style))
+                        FormatBox(label: "\(style.longName) citation", citation: citation) {
+                            CitationPasteboard.write(citation)
                             coordinator.showToast("\(style.rawValue) citation copied to clipboard")
                         }
                     }
@@ -119,24 +117,26 @@ struct CitePanelView: View {
         }
     }
 
+    /// Exports are plain text by nature (BibTeX, RIS).
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
 }
 
-/// A citation rendering that copies on click and tints on hover.
+/// A citation rendering that copies on click and tints on hover. Italic
+/// runs (journal titles) come through the attributed string.
 private struct FormatBox: View {
     /// Accessible name of the control ("APA 7 citation").
     let label: String
-    let text: String
+    let citation: FormattedCitation
     let action: () -> Void
 
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            Text(text)
+            Text(citation.attributedString)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .lineSpacing(3)
@@ -152,7 +152,7 @@ private struct FormatBox: View {
         }
         .help("Copy this \(label)")
         .accessibilityLabel(label)
-        .accessibilityValue(text)
+        .accessibilityValue(citation.plainText)
         .accessibilityHint("Copies the citation to the clipboard")
     }
 }
