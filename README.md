@@ -2,9 +2,11 @@
 
 Select a scientific sentence on your Mac to find supporting literature on PubMed. Review the evidence excerpts, open a paper, and copy a formatted citation into your document.
 
-**[Download GLKB Cite for Mac (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/latest/download/GLKB-Cite.dmg)**
+**[Download the signed 0.2.0 Mac installer (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/download/v0.2.0/GLKB-Cite.dmg)**
 
-Version 0.2.0 (build 12) · Apple silicon (M-series) · macOS 13 Ventura or later
+Source release **1.0.0** (build 14) includes the updated citation endpoint. Its signed installer is pending.
+
+Signed installer 0.2.0 (build 12) · Apple silicon (M-series) · macOS 13 Ventura or later
 
 ## Install and find your first citation
 
@@ -15,7 +17,7 @@ Version 0.2.0 (build 12) · Apple silicon (M-series) · macOS 13 Ventura or late
 
 The app sends your selection to GLKB when you request citations. Your API key is stored in macOS Keychain.
 
-[Installation and troubleshooting](INSTALL.md) · [Release notes](https://github.com/RingoMao/GLKB-cite/releases/latest) · [Privacy](PRIVACY.md)
+[Installation and troubleshooting](INSTALL.md) · [Release notes](https://github.com/RingoMao/GLKB-cite/releases) · [Privacy](PRIVACY.md)
 
 ## What it does
 
@@ -43,7 +45,7 @@ GLKB Cite is citation-only. It does not include HIRN QA or a general chatbot.
 ## Current GLKB API contract
 
 ```http
-POST https://jieliulab3.dcmb.med.umich.edu/reorg-api/api/v1/api-key-agent/cite
+POST https://backend.glkb.org/reorg-api/api/v1/api-key-agent/cite
 Authorization: Bearer glkb_…
 Content-Type: application/json
 

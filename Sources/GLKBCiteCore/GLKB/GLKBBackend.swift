@@ -5,7 +5,7 @@ import FoundationNetworking
 
 public final class GLKBBackend: LiteratureBackend, @unchecked Sendable {
     public static let defaultEndpoint = URL(
-        string: "https://jieliulab3.dcmb.med.umich.edu/reorg-api/api/v1/api-key-agent/cite"
+        string: "https://backend.glkb.org/reorg-api/api/v1/api-key-agent/cite"
     )!
 
     /// Responses above this size are rejected before parsing. A citation

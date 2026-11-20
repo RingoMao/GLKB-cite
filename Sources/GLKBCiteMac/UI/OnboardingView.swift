@@ -203,7 +203,7 @@ struct OnboardingView: View {
         do {
             try coordinator.saveAPIKey(apiKey)
             apiKey = ""
-            message = "GLKB API key saved securely."
+            advance()
         } catch {
             message = error.localizedDescription
         }
