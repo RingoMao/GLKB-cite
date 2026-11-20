@@ -43,7 +43,7 @@ GLKB Cite is citation-only. It does not include HIRN QA or a general chatbot.
 ## Current GLKB API contract
 
 ```http
-POST https://jieliulab3.dcmb.med.umich.edu/reorg-api/api/v1/api-key-agent/cite
+POST https://backend.glkb.org/reorg-api/api/v1/api-key-agent/cite
 Authorization: Bearer glkb_…
 Content-Type: application/json
 

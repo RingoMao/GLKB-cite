@@ -9,7 +9,7 @@ API responses, citation content, or credentials.
 badge, pressing `⌥⌘G`, choosing *Find Citations*, or using the macOS Service)
 the selected text and the requested reference count are sent over HTTPS to:
 
-`https://jieliulab3.dcmb.med.umich.edu/reorg-api/api/v1/api-key-agent/cite`
+`https://backend.glkb.org/reorg-api/api/v1/api-key-agent/cite`
 
 The request carries your GLKB API key as a Bearer credential, `Content-Type`
 and `Accept` headers, and the system's default `User-Agent` header, which names

@@ -16,12 +16,8 @@ private final class FloatingKeyablePanel: NSPanel {
 
 /// Hosts the results panel.
 ///
-/// Placement is deliberately predictable: whenever the panel is brought on
-/// screen from hidden it appears at the top-right corner of the display the
-/// selection (or the pointer) is on. While it stays visible it keeps whatever
-/// position it has — including anywhere the user dragged it by its header —
-/// and content-driven height changes grow it downward from a fixed top edge,
-/// like a normal window.
+/// The first result stays centered on the pointer's display as it loads.
+/// Later openings use the selection's display. Dragging takes over placement.
 @MainActor
 final class ResultPanelController: NSObject, NSWindowDelegate {
     private weak var coordinator: AppCoordinator?
@@ -29,6 +25,9 @@ final class ResultPanelController: NSObject, NSWindowDelegate {
     /// The top-left corner the panel is pinned to while visible.
     private var pinnedTopLeft: CGPoint?
     private var isRepositioning = false
+    private var hasPresented = false
+    private var centerOnResize = false
+    private var placementScreen: NSScreen?
 
     private static let screenMargin: CGFloat = 16
 
@@ -63,13 +62,21 @@ final class ResultPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(anchor: ScreenRect?) {
-        let screen = Self.targetScreen(for: anchor.map(CGRect.init))
+        if !panel.isVisible {
+            centerOnResize = !hasPresented
+            hasPresented = true
+            placementScreen = Self.targetScreen(for: centerOnResize ? nil : anchor.map(CGRect.init))
+        }
+        let screen = placementScreen ?? panel.screen
         if let visible = screen?.visibleFrame {
             coordinator?.limitResultPanelHeight(toAvailable: visible.height - 2 * Self.screenMargin)
         }
         panel.layoutIfNeeded()
         if !panel.isVisible {
-            placeAtTopRight(of: screen)
+            if let visible = screen?.visibleFrame {
+                pin(topLeft: CGPoint(x: visible.maxX - Self.screenMargin - panel.frame.width,
+                                     y: visible.maxY - Self.screenMargin))
+            }
         }
         panel.orderFrontRegardless()
         // Key status is what makes Escape close the panel and lets its
@@ -90,25 +97,25 @@ final class ResultPanelController: NSObject, NSWindowDelegate {
 
     // MARK: Placement
 
-    private func placeAtTopRight(of screen: NSScreen?) {
-        guard let visible = screen?.visibleFrame else { return }
-        pin(topLeft: CGPoint(
-            x: visible.maxX - Self.screenMargin - panel.frame.width,
-            y: visible.maxY - Self.screenMargin
-        ))
-    }
-
-    /// Moves the panel so its top-left corner sits at `topLeft`, nudging it
-    /// up only if its bottom would otherwise fall off the screen.
     private func pin(topLeft: CGPoint) {
-        var origin = CGPoint(x: topLeft.x, y: topLeft.y - panel.frame.height)
-        if let visible = (NSScreen.screens.first { NSMouseInRect(topLeft, $0.frame, false) } ?? NSScreen.main)?.visibleFrame {
-            origin.y = max(origin.y, visible.minY + Self.screenMargin)
-        }
+        guard let visible = (placementScreen ?? panel.screen ?? NSScreen.main)?.visibleFrame else { return }
+        let origin = Self.constrainedOrigin(topLeft: topLeft, size: panel.frame.size,
+                                            visible: visible, centered: centerOnResize)
         pinnedTopLeft = CGPoint(x: origin.x, y: origin.y + panel.frame.height)
         isRepositioning = true
         panel.setFrameOrigin(origin)
         isRepositioning = false
+    }
+
+    static func constrainedOrigin(topLeft: CGPoint, size: CGSize, visible: CGRect, centered: Bool) -> CGPoint {
+        let x = centered ? visible.midX - size.width / 2 : topLeft.x
+        let y = centered ? visible.midY - size.height / 2 : topLeft.y - size.height
+        let marginX = min(screenMargin, max(0, (visible.width - size.width) / 2))
+        let marginY = min(screenMargin, max(0, (visible.height - size.height) / 2))
+        return CGPoint(
+            x: max(visible.minX + marginX, min(x, visible.maxX - marginX - size.width)),
+            y: max(visible.minY + marginY, min(y, visible.maxY - marginY - size.height))
+        )
     }
 
     /// The display the selection was made on, else the one under the pointer.
@@ -133,6 +140,11 @@ final class ResultPanelController: NSObject, NSWindowDelegate {
     /// adopt that position for the rest of this visibility session.
     func windowDidMove(_ notification: Notification) {
         guard !isRepositioning, panel.isVisible else { return }
+        if NSEvent.pressedMouseButtons & 1 != 0 {
+            centerOnResize = false
+            placementScreen = panel.screen
+        }
+        guard !centerOnResize else { return }
         pinnedTopLeft = CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
     }
 

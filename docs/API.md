@@ -2,7 +2,7 @@
 
 GLKB Cite currently targets one citation-only endpoint:
 
-`POST https://jieliulab3.dcmb.med.umich.edu/reorg-api/api/v1/api-key-agent/cite`
+`POST https://backend.glkb.org/reorg-api/api/v1/api-key-agent/cite`
 
 ## Request
 
