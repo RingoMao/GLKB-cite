@@ -2,5 +2,5 @@
 # Scripts/release-tester.sh and CI read it; the values in Info.plist are
 # placeholders that the build replaces. Raise BUILD_NUMBER for every build
 # handed to anyone (Sparkle compares it numerically) and VERSION for releases.
-VERSION=0.2.0
-BUILD_NUMBER=13
+VERSION=1.0.0
+BUILD_NUMBER=14

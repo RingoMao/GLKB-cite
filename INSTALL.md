@@ -10,7 +10,7 @@ setup, everyday use, and troubleshooting.
 - A Mac with Apple silicon (M-series) running macOS 13 Ventura or later. Check **Apple menu → About This Mac** for the chip and macOS version.
 - A GLKB API key (it starts with `glkb_`). Ask the GLKB team if you do not
   have one.
-- [Download the signed GLKB Cite disk image (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/latest/download/GLKB-Cite.dmg).
+- [Download the signed GLKB Cite disk image (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/download/v0.2.0/GLKB-Cite.dmg).
 
 ## 1. Install
 
@@ -33,8 +33,7 @@ A four-step window opens the first time GLKB Cite runs.
    notices the change by itself and shows "Access granted". (Accessibility is
    how the app reads the text you selected in another app. It never reads
    password or other secure fields.)
-3. **Store your GLKB key** — paste your `glkb_` key and click **Save**, then
-   **Continue**. The key is stored only in your macOS Keychain and sent only
+3. **Store your GLKB key** — paste your `glkb_` key and click **Save**. Version 1.0 advances automatically. In 0.2.0, click **Continue**. The key is stored only in your macOS Keychain and sent only
    to the GLKB endpoint.
 4. **Your choices** — decide whether to show the selection badge and whether
    to allow the temporary Copy fallback (both switches are on this step and
@@ -64,7 +63,7 @@ commands above.
 
 ### The results panel
 
-The panel opens at the top-right corner of the display you are working on.
+In 1.0 the first panel after launch opens in the center of the display under the pointer. Subsequent openings use the top-right corner. In 0.2.0 every opening uses the top-right corner.
 Drag it anywhere by its header, like any window; it stays where you put it
 while it remains open. Press **Esc** or click **✕** to close it.
 
@@ -175,7 +174,7 @@ specific sentence containing a clear scientific claim.
 
 ### The results panel opened on another display or off to the side
 
-It always opens at the top-right of the display where the selection was made.
+In 1.0, check the center of the display under the pointer on first use. Later openings use the top-right of the selection’s display. In 0.2.0, check the top-right on first use as well.
 If you have dragged it, it keeps that position until closed; close it with
 **Esc** and search again to reset.
 
