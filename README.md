@@ -1,16 +1,21 @@
 # GLKB Cite
 
-GLKB Cite is a native macOS menu-bar app for finding biomedical citations from
-selected text. Its core workflow is simple:
+Select a scientific sentence on your Mac to find supporting literature on PubMed. Review the evidence excerpts, open a paper, and copy a formatted citation into your document.
 
-> Select text -> Click GLKB cite button -> Request GLKB -> Return references
+**[Download GLKB Cite for Mac (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/latest/download/GLKB-Cite.dmg)**
 
-The app is a team-development handoff of the working macOS demo. It is a
-clean-room implementation built with public Apple APIs and does not contain or
-depend on PopClip.
+Version 0.2.0 (build 12) · Apple silicon (M-series) · macOS 13 Ventura or later
 
-> **Project status:** internal alpha. Source builds are usable for development,
-> but builds for other users must be Developer ID signed and notarized first.
+## Install and find your first citation
+
+1. Open the downloaded disk image and drag **GLKB Cite** to **Applications**.
+2. Open **GLKB Cite** from Applications. Its icon appears in the menu bar.
+3. Follow setup to enable **GLKB Cite** under **System Settings → Privacy & Security → Accessibility** and save your GLKB API key. Contact the GLKB team if you need a key.
+4. Select a scientific sentence in another app and press **Option–Command–G** or click the GLKB badge. Choose a PMID to read the paper or **Cite** to copy a reference.
+
+The app sends your selection to GLKB when you request citations. Your API key is stored in macOS Keychain.
+
+[Installation and troubleshooting](INSTALL.md) · [Release notes](https://github.com/RingoMao/GLKB-cite/releases/latest) · [Privacy](PRIVACY.md)
 
 ## What it does
 
@@ -57,7 +62,7 @@ credential or selected text.
 Do not put an API key in this repository, fixtures, shell history, logs, or the
 application bundle.
 
-## Requirements
+## Development requirements
 
 - macOS 13 or later
 - Swift 6 / Xcode 16 or later for development

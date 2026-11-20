@@ -2,15 +2,15 @@
 
 GLKB Cite is a menu-bar app for macOS. Select a scientific sentence in any
 app, click the badge (or press `⌥⌘G`), and it returns PubMed literature
-evidence you can cite. This guide covers installing a test build, first-run
+evidence you can cite. This guide covers installing the signed release, first-run
 setup, everyday use, and troubleshooting.
 
 ## Requirements
 
-- macOS 13 Ventura or later. The build is universal (Apple silicon and Intel).
+- A Mac with Apple silicon (M-series) running macOS 13 Ventura or later. Check **Apple menu → About This Mac** for the chip and macOS version.
 - A GLKB API key (it starts with `glkb_`). Ask the GLKB team if you do not
   have one.
-- The disk image, for example `GLKB Cite 0.2.0.dmg`.
+- [Download the signed GLKB Cite disk image (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/latest/download/GLKB-Cite.dmg).
 
 ## 1. Install
 
@@ -18,35 +18,9 @@ setup, everyday use, and troubleshooting.
    registers the same `⌥⌘G` shortcut).
 2. Double-click the `.dmg`.
 3. Drag **GLKB Cite** onto the **Applications** shortcut in the window.
-4. Eject **GLKB Cite Installer**.
+4. Eject the disk image in Finder.
 5. Open **GLKB Cite** from `/Applications` (not the copy inside the disk
    image). It appears as a GLKB icon in the menu bar; there is no Dock icon.
-
-<!-- unsigned-only:start -->
-### If macOS says the app "is damaged and can't be opened"
-
-This build is an unsigned test build, not notarized by Apple, and any download
-carries macOS's quarantine flag. Together those produce a misleading "damaged"
-message — nothing is actually damaged — and on macOS 15 Sequoia and later
-there is no **Open Anyway** button for this case. Remove the quarantine flag
-yourself.
-
-Preferably, run this on the disk image **before** opening it (adjust the path
-if your download went elsewhere), then install as above:
-
-```bash
-xattr -d com.apple.quarantine ~/Downloads/GLKB\ Cite*.dmg
-```
-
-If you already dragged the app to Applications, clear it there instead:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/GLKB Cite.app"
-```
-
-Only do this for a build you received directly from the GLKB Cite team.
-Notarized releases open with a plain double-click and need none of this.
-<!-- unsigned-only:end -->
 
 ## 2. First launch: the setup wizard
 
@@ -138,24 +112,12 @@ open).
 - **Privacy** — turn the temporary Copy fallback on or off and review what
   leaves your Mac.
 
-Release builds that ship with an update channel add **Check for Updates…** to
-the menu-bar menu; test builds have no update channel and show no such item.
+For updates, download the latest disk image from [GitHub Releases](https://github.com/RingoMao/GLKB-cite/releases/latest).
 
 ## 5. Upgrading
 
 Quit GLKB Cite, replace the app in Applications with the new copy, and launch
 it. Your settings and API key are kept across upgrades.
-
-<!-- unsigned-only:start -->
-Because test builds are not signed with a persistent identity, macOS treats
-each new build as a different app:
-
-- Accessibility access must be granted again. The app asks at launch; if it
-  does not, open *Privacy & Security → Accessibility*, remove the old GLKB
-  Cite entry, click **+**, add `/Applications/GLKB Cite.app`, and enable it.
-- The Keychain asks once for permission to read the stored key: **Always
-  Allow**.
-<!-- unsigned-only:end -->
 
 ## 6. Troubleshooting
 
