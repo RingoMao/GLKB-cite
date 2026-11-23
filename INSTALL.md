@@ -2,15 +2,17 @@
 
 GLKB Cite is a menu-bar app for macOS. Select a scientific sentence in any
 app, click the badge (or press `⌥⌘G`), and it returns PubMed literature
-evidence you can cite. This guide covers installing the signed release, first-run
+evidence you can cite. This guide covers installing the internal test build, first-run
 setup, everyday use, and troubleshooting.
 
 ## Requirements
 
-- A Mac with Apple silicon (M-series) running macOS 13 Ventura or later. Check **Apple menu → About This Mac** for the chip and macOS version.
+- A Mac with Apple silicon or an Intel processor running macOS 13 Ventura or later. Check **Apple menu → About This Mac** for the chip and macOS version.
 - A GLKB API key (it starts with `glkb_`). Ask the GLKB team if you do not
   have one.
-- [Download the signed GLKB Cite disk image (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/download/v0.2.0/GLKB-Cite.dmg).
+- [Download the 1.0.0 internal test disk image (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/download/v1.0.0/GLKB-Cite-1.0.0-build14-internal.dmg).
+
+This internal test build has an ad-hoc app signature only. It has not been signed with an Apple Developer ID or notarized by Apple. macOS Gatekeeper may block it when first opened.
 
 ## 1. Install
 

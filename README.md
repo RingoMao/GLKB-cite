@@ -2,11 +2,13 @@
 
 Select a scientific sentence on your Mac to find supporting literature on PubMed. Review the evidence excerpts, open a paper, and copy a formatted citation into your document.
 
-**[Download the signed 0.2.0 Mac installer (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/download/v0.2.0/GLKB-Cite.dmg)**
+**[Download GLKB Cite 1.0.0 for internal testing (.dmg)](https://github.com/RingoMao/GLKB-cite/releases/download/v1.0.0/GLKB-Cite-1.0.0-build14-internal.dmg)**
 
-Source release **1.0.0** (build 14) includes the updated citation endpoint. Its signed installer is pending.
+Build 14 · Apple silicon and Intel · macOS 13 Ventura or later
 
-Signed installer 0.2.0 (build 12) · Apple silicon (M-series) · macOS 13 Ventura or later
+This internal test build has an ad-hoc app signature only. It has not been signed with an Apple Developer ID or notarized by Apple. macOS Gatekeeper may block it when first opened.
+
+[Version 0.2.0 (obsolete)](https://github.com/RingoMao/GLKB-cite/releases/tag/v0.2.0) uses the previous citation endpoint.
 
 ## Install and find your first citation
 
