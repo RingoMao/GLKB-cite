@@ -24,6 +24,14 @@ This internal test build has an ad-hoc app signature only. It has not been signe
 5. Open **GLKB Cite** from `/Applications` (not the copy inside the disk
    image). It appears as a GLKB icon in the menu bar; there is no Dock icon.
 
+If macOS blocks the first launch, verify the downloaded DMG with
+`shasum -a 256 ~/Downloads/GLKB-Cite-1.0.0-build14-internal.dmg` and compare
+the result with the checksum on the [1.0 release page](https://github.com/RingoMao/GLKB-cite/releases/tag/v1.0.0).
+If it matches and you intend to test this build, open **System Settings → Privacy & Security**.
+If macOS offers **Open Anyway** for GLKB Cite, select it and confirm. If that option
+is unavailable or macOS reports the app is damaged, contact the test coordinator
+for a signed build. On managed Macs, follow your organization's software policy.
+
 ## 2. First launch: the setup wizard
 
 A four-step window opens the first time GLKB Cite runs.
